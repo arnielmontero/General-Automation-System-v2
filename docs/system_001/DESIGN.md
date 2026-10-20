@@ -108,9 +108,12 @@ Button **Generate from Odoo** on a saved record:
    `SS08027`, `S8027`, `O8027`, `08027`, `SO# 08027`, and a bare `8027` with no S0 — are **auto-corrected** (still matched) and the MO gets a **fix flag**
    *Source fix: SO8027 → S08027* (also a *Source Fix* column in Excel) so the Source can be corrected in Odoo.
    Never matched as part of another number or a date / time (`S080271`, `PO8027`, `10/16/2026`, `2026-08-07`),
-   nor a bare number in parentheses — that is the customer code (`UKRAINE(4300)`, `Sauna Europe (11500)`).
-   A bare number that is really a customer code written without parentheses (`UKRAINE 4300`) can still be
-   picked up; the fix flag makes such rows visible.
+   A bare number (no S / O) is only taken as the SO when it is the only order reference in the Source. It is
+   skipped when it is alone in brackets (`UKRAINE(4300)`, `UKRAINE ( 4300 )`), next to another SO
+   (`SO6863 - Australia - 8200`: 8200 is the customer code), followed by a model code or quantity (`1414RS`,
+   `100pcs`), or the year of a date (`July 30, 2026`, `Jan.08,2026`). And when the number is used as a customer
+   code in any Source the search returns (in brackets or next to another SO), bare numbers are ignored for that SO
+   altogether, so `Heater for UKRAINE 4300` is not taken for S04300 — only its prefixed spellings count.
 2. For each grouped packing line, match MOs whose product **Internal Reference = External Code**.
    Every matching MO in those states is saved.
 3. MOs of the SO whose product is **not on the packing list** (components / sub-assemblies made for the SO,

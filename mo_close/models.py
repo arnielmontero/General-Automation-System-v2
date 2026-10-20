@@ -30,12 +30,66 @@ def so_source_pattern(so):
     number = re.escape(so_digits(so))
     prefixed = r"(?<![A-Za-z0-9])(?:S{1,2}" + sep + r"[O0]?|[O0])" + sep + r"0*" + number + r"(?!\d)"
     bare = r"(?<![A-Za-z0-9/.:(-])0*" + number + r"(?![\d/)]|[.:-]\d)"
-    return re.compile(prefixed + "|" + bare, re.IGNORECASE)
+    return re.compile(f"(?P<prefixed>{prefixed})|(?P<bare>{bare})", re.IGNORECASE)
+
+
+# An SO written with a letter prefix (S08027, SO6863, SS08027, S 8027) — used to tell that a bare number next to
+# it is not an SO but the customer code ('SO6863 - Australia - 8200').
+_PREFIXED_SO = re.compile(r"(?<![A-Za-z0-9])(?:S{1,2}[\s#.:-]*[O0]?|O)[\s#.:-]*0*(\d{3,6})(?!\d)", re.IGNORECASE)
+_MONTH = (
+    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?"
+    r"|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b"
+)
+_DATE_BEFORE = re.compile(_MONTH + r"[\s.,]*(?:\d{1,2}[\s.,]*)?$|\d\s*,\s*$", re.IGNORECASE)
+
+
+def _other_so_in(so, source):
+    number = int(so_digits(so)) if so_digits(so).isdigit() else None
+    return any(int(m.group(1)) != number for m in _PREFIXED_SO.finditer(source))
+
+
+def _bare_is_so(so, source, m):
+    """A bare number is the SO only when it is not a customer code, model code, quantity or year."""
+    before, after = source[: m.start()], source[m.end() :]
+    if re.search(r"\(\s*$", before) and re.match(r"\s*\)", after):
+        return False  # alone in brackets: customer code, 'UKRAINE ( 4300 )'
+    if re.match(r"[A-Za-z]{1,3}(?![A-Za-z])", after):
+        return False  # model code or quantity: 'For 1414RS', '100pcs'
+    if _DATE_BEFORE.search(before):
+        return False  # year of a date: 'July 30, 2026', 'Jan.08,2026'
+    return not _other_so_in(so, source)  # 'SO6863 - Australia - 8200': the SO is 6863, 8200 the customer code
+
+
+def so_in_source(so, source, bare=True):
+    """Every spelling of the SO found in an MO Source (['SO8027']), [] when it is not there. bare=False ignores
+    bare numbers (no S / O prefix), for an SO whose number is also a customer code — see so_is_customer_code."""
+    source = source or ""
+    return [
+        m.group(0)
+        for m in so_source_pattern(so).finditer(source)
+        if m.group("prefixed") or (bare and _bare_is_so(so, source, m))
+    ]
+
+
+def so_is_customer_code(so, sources):
+    """True when the SO's number is a customer code in any of these MO Sources — alone in brackets
+    ('UKRAINE(4300)', 'UKRAINE ( 4300 )') or bare next to another SO ('SO6863 - Australia - 8200'). Then a bare
+    number in a Source ('Heater for UKRAINE 4300') is the customer, not the SO."""
+    number = re.escape(so_digits(so))
+    in_brackets = re.compile(r"\(\s*0*" + number + r"\s*\)")
+    pattern = so_source_pattern(so)
+    for source in sources:
+        source = source or ""
+        if in_brackets.search(source):
+            return True
+        if _other_so_in(so, source) and any(m.group("bare") for m in pattern.finditer(source)):
+            return True
+    return False
 
 
 def so_source_fix(so, source):
     """The wrong spelling of the SO in an MO Source ('SO8027'), or '' when it is written correctly."""
-    found = [m.group(0) for m in so_source_pattern(so).finditer(source or "")]
+    found = so_in_source(so, source)
     if not found or so in found:
         return ""
     return found[0]

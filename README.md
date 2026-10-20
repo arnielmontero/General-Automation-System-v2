@@ -10,7 +10,7 @@ Packing list → Odoo Manufacturing Orders → tracked until everything is confi
 | Step | What happens |
 |---|---|
 | 1 | **New Record** named by SO → upload the Odoo packing list PDF → the system separates the information (Sold To, Date, Invoice No., Container No., …) from the list data (External Code, Description, Qty, …) → review → **Save** |
-| 2 | **Generate from Odoo**: MOs whose Source contains the SO (correct form S08027; wrong spellings like SO8027, So8027, S8027, O8027, 08027 or a bare 8027 are auto-corrected and get a **Source fix** flag), in state Confirmed / In Progress / To Close, matched to the packing list External Codes; MOs for products not on the packing list (components) are saved too, in their own group; each MO's transfers (PC, SFP …) that are not Done are saved |
+| 2 | **Generate from Odoo**: MOs whose Source contains the SO (correct form S08027; wrong spellings like SO8027, So8027, S8027, O8027, 08027 or a bare 8027 are auto-corrected and get a **Source fix** flag; a bare number is skipped when it is a customer code, model code, quantity or year), in state Confirmed / In Progress / To Close, matched to the packing list External Codes; MOs for products not on the packing list (components) are saved too, in their own group; each MO's transfers (PC, SFP …) that are not Done are saved |
 | 3 | **Progress**: users tick each MO / transfer row as done → the system checks Odoo right away (Done in Odoo / not) → a **Checker / Supervisor** gives final confirmation (comment required when Odoo does not show Done). Everything is logged. Excel / PDF reports per SO and for all open items |
 
 Process: [docs/system_001/FLOW.md](docs/system_001/FLOW.md) · Design: [docs/system_001/DESIGN.md](docs/system_001/DESIGN.md)

@@ -22,7 +22,8 @@ from .models import (
     TransferRecord,
     norm_code,
     so_digits,
-    so_source_pattern,
+    so_in_source,
+    so_is_customer_code,
 )
 from .pdf_parser import parse_date
 
@@ -201,8 +202,9 @@ def generate_from_odoo(request, pl, client):
         MO_FIELDS,
         order="name",
     )
-    pattern = so_source_pattern(pl.so_number)
-    mos = [m for m in mos if pattern.search(m.get("origin") or "")]
+    # A bare number (no S / O) only counts when the number is not also a customer code in these Sources.
+    bare = not so_is_customer_code(pl.so_number, [m.get("origin") for m in mos])
+    mos = [m for m in mos if so_in_source(pl.so_number, m.get("origin"), bare=bare)]
 
     product_ids = {_m2o(m["product_id"])[0] for m in mos} - {None}
     products = {p["id"]: p for p in client.read("product.product", product_ids, ["default_code", "name"])}

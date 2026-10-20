@@ -189,6 +189,29 @@ class WorkflowTests(TestCase):
         self.assertEqual(so_source_fix("S08027", "CU for 8027 - Sawo"), "8027")
         self.assertEqual(so_source_fix("S08027", "SS08027-UKRAINE"), "SS08027")
 
+    def test_so_bare_number_is_not_a_customer_code_model_or_year(self):
+        from mo_close.models import so_in_source, so_is_customer_code
+
+        # Taken as the SO: a bare number that is the only order reference in the Source.
+        for so, text in [("S05270", "5270 SAWO EUROPE"), ("S09164", "prio 800 for the SSE 9164, Completion 10/16"),
+                         ("S08643", "THAILAND  8643Consolidated SF + buffer"), ("S04793", "( KOREA 4793 )")]:
+            self.assertTrue(so_in_source(so, text), text)
+        # Not the SO: customer code alone in brackets or next to another SO, model code / quantity, year of a date.
+        for so, text in [("S04300", "S06092 - UKRAINE ( 4300 ) = 03/13"),
+                         ("S08200", "HP for SO6863 - Australia - 8200 - Target Date: 6-5-26"),
+                         ("S01500", "Heater for S04752 - HOLLAND SAWO 2 - 1500 - target date 11/25/25"),
+                         ("S01414", "EC for Local - Target Date: 7-24-26(For 1414RS)"),
+                         ("S00100", "prio 100pcs Consolidated SF + buffer"),
+                         ("S02026", "Target Date: July 30, 2026"), ("S02026", "Target date Jan.08,2026 by air")]:
+            self.assertEqual(so_in_source(so, text), [], text)
+        # Prefixed spellings are kept whatever else is in the Source.
+        self.assertEqual(so_in_source("S08200", "HP for SO8200 - USA - 00000"), ["SO8200"])
+        # Once the number is a customer code anywhere in the search results, bare numbers are ignored for the SO.
+        sources = ["S06092 - UKRAINE ( 4300 ) = 03/13", "Heater for UKRAINE 4300 - target date 1/9/26", "S04300 - X"]
+        self.assertTrue(so_is_customer_code("S04300", sources))
+        self.assertFalse(so_is_customer_code("S05270", ["5270 SAWO EUROPE", "SO 5270 Sauna Europe"]))
+        self.assertEqual([s for s in sources if so_in_source("S04300", s, bare=False)], ["S04300 - X"])
+
     def test_step2_generate_again_keeps_tracking(self):
         pl = self.save_and_generate()
         mo = pl.mos.get(reference="PL3/MO/06873")
