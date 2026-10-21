@@ -41,7 +41,7 @@ class NewRecordForm(forms.Form):
     so_number = forms.CharField(
         label="Sales Order (SO)",
         max_length=20,
-        widget=forms.TextInput(attrs={"placeholder": "e.g. S04743", "class": "form-control", "autofocus": True}),
+        widget=forms.TextInput(attrs={"placeholder": "e.g. S04743 or 4743", "class": "form-control", "autofocus": True}),
     )
     pdf = forms.FileField(
         label="Packing list PDF",
@@ -69,7 +69,7 @@ class UploadForm(forms.Form):
     so_number = forms.CharField(
         label="Sales Order (SO)",
         max_length=30,
-        widget=forms.TextInput(attrs={"placeholder": "e.g. S04743 or S04743-1", "class": "form-control", "autofocus": True}),
+        widget=forms.TextInput(attrs={"placeholder": "e.g. S04743, 4743 or S04743-1", "class": "form-control", "autofocus": True}),
     )
     parent_so = forms.CharField(
         label="Parent SO (optional)",

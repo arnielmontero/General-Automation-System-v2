@@ -11,7 +11,7 @@ from django.utils.http import urlencode
 from core.odoo import MO_STATES, PICKING_STATES
 
 from .models import MORecord, PackingList, TransferRecord
-from .services import progress_counts
+from .services import progress_counts, so_search_terms
 
 GROUPS = OrderedDict([("day", "Day"), ("month", "Month"), ("year", "Year")])
 BASES = OrderedDict([("created", "Record created"), ("doc_date", "Packing list date")])
@@ -195,7 +195,10 @@ def build(f):
     elif f.status == "closed":
         qs = qs.filter(status=PackingList.Status.CLOSED)
     if f.so:
-        qs = qs.filter(Q(so_number__icontains=f.so) | Q(sales_orders__so_number__icontains=f.so)).distinct()
+        match = Q()
+        for term in so_search_terms(f.so):
+            match |= Q(so_number__icontains=term) | Q(sales_orders__so_number__icontains=term)
+        qs = qs.filter(match).distinct()
     if f.basis == "doc_date":
         qs = qs.exclude(doc_date=None)
         if f.date_from:

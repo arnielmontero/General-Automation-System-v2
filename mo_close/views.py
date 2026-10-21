@@ -116,15 +116,19 @@ def dashboard(request):
 
 
 def _records_matching(q):
-    """Ids of records whose parent or any child SO matches, or the Sold To / container / invoice of any PDF."""
-    return PackingList.objects.filter(
-        Q(so_number__icontains=q)
-        | Q(sales_orders__so_number__icontains=q)
-        | Q(sold_to__icontains=q)
-        | Q(documents__sold_to__icontains=q)
-        | Q(documents__container_no__icontains=q)
-        | Q(documents__invoice_no__icontains=q)
-    ).values("pk")
+    """Ids of records whose parent or any child SO matches, or the Sold To / container / invoice of any PDF.
+    A wrongly typed SO (SO4743) also finds S04743."""
+    match = Q()
+    for term in services.so_search_terms(q):
+        match |= (
+            Q(so_number__icontains=term)
+            | Q(sales_orders__so_number__icontains=term)
+            | Q(sold_to__icontains=term)
+            | Q(documents__sold_to__icontains=term)
+            | Q(documents__container_no__icontains=term)
+            | Q(documents__invoice_no__icontains=term)
+        )
+    return PackingList.objects.filter(match).values("pk")
 
 
 def _plant_counts():
@@ -183,14 +187,17 @@ def _plant_records(request, plant):
     elif show == "closed":
         qs = qs.filter(packing_list__status=PackingList.Status.CLOSED)
     if q:
-        qs = qs.filter(
-            Q(packing_list__so_number__icontains=q)
-            | Q(sales_order__so_number__icontains=q)
-            | Q(reference__icontains=q)
-            | Q(fg_code__icontains=q)
-            | Q(fg_description__icontains=q)
-            | Q(transfers__reference__icontains=q)
-        )
+        match = Q()
+        for term in services.so_search_terms(q):
+            match |= (
+                Q(packing_list__so_number__icontains=term)
+                | Q(sales_order__so_number__icontains=term)
+                | Q(reference__icontains=term)
+                | Q(fg_code__icontains=term)
+                | Q(fg_description__icontains=term)
+                | Q(transfers__reference__icontains=term)
+            )
+        qs = qs.filter(match)
     if f != "all":
         qs = qs.filter(_row_q(f) | _row_q(f, "transfers__"))
     qs = (
@@ -253,6 +260,7 @@ def _upload(request, form, record=None):
     for upload, result in zip(files, parsed):
         upload.seek(0)
         services.add_document(request, node, upload, result, odoo_check)
+    _say_corrected(request, form)
     return node.record
 
 
@@ -289,8 +297,18 @@ def record_new(request):
                     form.add_error("so_number", exc.messages)
                 else:
                     services.add_document(request, node, upload, parsed, odoo_check)
+                    _say_corrected(request, form)
                     return redirect("mo_close:record_preview", pk=node.record_id)
     return render(request, "mo_close/record_new.html", {"form": form})
+
+
+def _say_corrected(request, form):
+    """Tell the user when a wrongly typed SO (SO4743, S4743, O4743 …) was corrected; the plain number is fine."""
+    for field in ("so_number", "parent_so"):
+        typed = (form.data.get(field) or "").strip()
+        so = form.cleaned_data.get(field)
+        if typed and so and typed != so and not re.fullmatch(r"\d+(?:-\d+)*", typed):
+            messages.info(request, f"SO “{typed}” was corrected to {so}.")
 
 
 @module_required("mo_close.create")

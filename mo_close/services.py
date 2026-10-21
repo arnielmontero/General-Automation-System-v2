@@ -51,9 +51,12 @@ def log(request, section, action, record, **kwargs):
 
 
 def normalize_so(value):
-    """'4743', 's04743', ' S04743 ', 'SO4743' → 'S04743'; child SOs keep their suffix: '4743-1' → 'S04743-1'."""
-    value = (value or "").strip().upper().replace(" ", "")
-    m = re.match(r"^(?:SO|S)?0*(\d+)((?:-\d+)*)$", value)
+    """The SO as saved: S + 0 + the number ('S04743'). Typed as the number ('4743') or the right way it is kept;
+    wrong spellings are corrected automatically — SO4743, So4743, S4743, O4743, SS04743, 'SO# 4743', 's0 4743'
+    → 'S04743'. Child SOs keep their suffix: 'SO4743-1' → 'S04743-1'. Anything else (SA4743) is left as typed
+    and refused by validate_so."""
+    value = re.sub(r"\s+", "", (value or "").upper())
+    m = re.match(r"^(?:S{1,2}|S?O)?[#.:-]*0*(\d+)((?:-\d+)*)$", value)
     if m:
         value = "S" + m.group(1).zfill(5) + m.group(2)
     return value
@@ -64,7 +67,17 @@ SO_RE = re.compile(r"^S\d{3,}(?:-\d+)*$")
 
 def validate_so(so):
     if not SO_RE.match(so):
-        raise ValidationError("Enter a Sales Order number like S04743, or a child SO like S04743-1.")
+        raise ValidationError(
+            "Enter the Sales Order as S04743 or just the number 4743 (a child SO as S04743-1). "
+            "S, SO or O in front is corrected automatically; other letters are not allowed."
+        )
+
+
+def so_search_terms(q):
+    """What a search box looks for: the text as typed, and the corrected SO when it is one ('SO4743' → also
+    'S04743'), so a wrongly typed SO still finds its record."""
+    so = normalize_so(q)
+    return [q, so] if SO_RE.match(so) and so != q.upper() else [q]
 
 
 def so_exists_in_odoo(client, so):

@@ -400,12 +400,22 @@ class WorkflowTests(TestCase):
         return self.client.post(reverse("mo_close:record_preview", args=[pl.pk]), {"action": "save"})
 
     def test_so_numbers_with_children(self):
+        from django.core.exceptions import ValidationError
+
         from mo_close.models import so_in_source, so_parent_number, so_root
-        from mo_close.services import normalize_so
+        from mo_close.services import normalize_so, validate_so
 
         self.assertEqual([so_root(v) for v in ("S04743", "S04743-1", "S04743-1-2")], ["S04743"] * 3)
         self.assertEqual([normalize_so(v) for v in ("4743-1", "s04743-1-2", "SO4743", " 4743 ")],
                          ["S04743-1", "S04743-1-2", "S04743", "S04743"])
+        # Saved as S + 0 + number; S / SO / O and other wrong spellings in front are corrected automatically.
+        wrong = ["S04743", "4743", "04743", "SO4743", "So4743", "so4743", "S4743", "O4743", "SS04743", "SO# 4743",
+                 "S0 4743", "SO-4743", "s o 4743"]
+        self.assertEqual({normalize_so(v) for v in wrong}, {"S04743"})
+        self.assertEqual(normalize_so("SO4743-1"), "S04743-1")
+        for bad in ("SA4743", "S", "SO", "O", "X4743", "SSO4743"):
+            with self.assertRaises(ValidationError, msg=bad):
+                validate_so(normalize_so(bad))
         self.assertEqual((so_parent_number("S04743-1-2"), so_parent_number("S04743-1"), so_parent_number("S04743")),
                          ("S04743-1", "S04743", ""))
         self.assertEqual(so_in_source("S04743", "Heater for S04743-1"), [])  # that is the child SO
@@ -487,6 +497,21 @@ class WorkflowTests(TestCase):
         self.assertContains(self.client.get(reverse("mo_close:progress"), {"q": "4743-1"}), "S04743")
         for fmt, magic in (("xlsx", b"PK"), ("pdf", b"%PDF")):
             self.assertTrue(self.client.get(reverse("mo_close:record_export", args=[pl.pk, fmt])).content.startswith(magic))
+
+    def test_wrong_so_is_corrected_on_entry_and_in_search(self):
+        resp = self.client.post(reverse("mo_close:record_new"), {"so_number": "SO 4743", "pdf": sample_upload()}, follow=True)
+        pl = PackingList.objects.get()
+        self.assertEqual(pl.so_number, "S04743")
+        self.assertContains(resp, "SO “SO 4743” was corrected to S04743.")
+        resp = self.client.post(reverse("mo_close:record_new"), {"so_number": "SA4743", "pdf": sample_upload()})
+        self.assertContains(resp, "other letters are not allowed")
+        self.save_preview(pl)
+        # Upload to the record with the SO typed wrong: it goes to S04743 / a child S04743-1, not a new SO.
+        self.add(pl, "O4743-1")
+        self.assertEqual([n.so_number for n in pl.so_tree()], ["S04743", "S04743-1"])
+        # Searching a wrongly typed SO finds the record.
+        resp = self.client.get(reverse("mo_close:progress"), {"q": "SO4743"})
+        self.assertEqual([p.so_number for p in resp.context["page"].object_list], ["S04743"])
 
     def test_additional_packing_list_uses_parent_s0_mos(self):
         # S04743-1 is an additional packing list of S04743: its MOs say S04743 in the Odoo Source.
