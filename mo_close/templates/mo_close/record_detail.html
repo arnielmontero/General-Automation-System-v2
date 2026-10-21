@@ -76,10 +76,6 @@
           </form>{% else %}<p class="small-note mb-0">Your role does not include Generate from Odoo.</p>{% endif %}
         </div>
       {% else %}
-        {% if source_fixes %}<div class="card-body-soft small pb-0"><span class="pill pill-sm tone-orange">Source fix</span>
-          The SO is written wrong in the Odoo Source of these MOs (the system still matched them):
-          {% for fx in source_fixes %}<div class="ms-2">{{ fx.refs|join:", " }} — the Source says <span class="mono fw-semibold">{{ fx.wrong }}</span>{% if fx.hint %} (<b>{{ fx.hint }}</b>){% endif %}, should be <span class="mono fw-semibold">{{ fx.so }}</span>.</div>{% endfor %}
-          Please correct the Source in Odoo.</div>{% endif %}
         <div class="table-responsive">
           <table class="table table-soft table-compact">
             <thead><tr><th>SO#</th><th>FG Code</th><th>FG</th><th class="text-end">Qty</th><th>MO / Transfer</th><th>State</th><th>Progress</th><th>SF-Innova</th><th>SF-Electrical</th><th>Marked done</th><th>System check</th><th>Final confirmation</th></tr></thead>

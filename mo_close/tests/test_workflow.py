@@ -161,8 +161,9 @@ class WorkflowTests(TestCase):
         self.assertContains(resp, "PL3/SFP/04631")
         self.assertContains(resp, "NRNF-105NS-BL-Z")  # in "No MO found"
         self.assertContains(resp, "Component · not on packing list")
-        self.assertContains(resp, "Source fix: SO4743 → S04743")
-        self.assertContains(resp, "the Source says <span class=\"mono fw-semibold\">SO4743</span> (<b>letter O instead of zero</b>)")
+        # SO4743 in the Source is corrected automatically: the MO is listed, without a Source fix message.
+        self.assertContains(resp, "PL1/MO/34770-002")
+        self.assertNotContains(resp, "Source fix")
         self.assertContains(resp, "PL1/SFP/16273")
 
     def test_so_in_source_spellings_and_fix_flag(self):
