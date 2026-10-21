@@ -19,7 +19,17 @@ from core.permissions import module_required
 
 from . import exports, report_exports, reports, services
 from .forms import NewRecordForm, UploadForm
-from .models import SYSTEM, MORecord, PackingDocument, PackingList, SalesOrder, TransferRecord, group_lines, norm_code
+from .models import (
+    SYSTEM,
+    MORecord,
+    PackingDocument,
+    PackingList,
+    SalesOrder,
+    TransferRecord,
+    group_lines,
+    norm_code,
+    so_fix_hint,
+)
 from .pdf_parser import PackingListParseError, parse_packing_list
 
 ROW_FILTERS = {
@@ -382,7 +392,7 @@ def record_detail(request, pk):
             "line_count": sum(len(n.groups) for n in tree),
             "drafts": pl.documents.filter(saved=False).count(),
             "unmatched": unmatched if pl.generated_at else [],
-            "source_fixes": [mo for mo in mos if mo.source_fix],
+            "source_fixes": _source_fixes(mos),
             "progress": counts,
             "f": f,
             "filters": ROW_FILTERS,
@@ -529,6 +539,16 @@ def sf_action(request, pk, team, action):
     except PermissionDenied:
         error = "Your role does not allow this."
     return _group_response(request, mo, error, error_kind="sf", error_pk=team)
+
+
+def _source_fixes(mos):
+    """MOs whose Odoo Source spells the SO wrong, by spelling: [{"wrong": "SO4743", "so": "S04743",
+    "hint": "letter O instead of zero", "refs": [MO references]}]."""
+    fixes = {}
+    for mo in mos:
+        if fix := mo.source_fix:
+            fixes.setdefault((fix, mo.source_so), []).append(mo.reference)
+    return [{"wrong": w, "so": so, "hint": so_fix_hint(w), "refs": refs} for (w, so), refs in fixes.items()]
 
 
 def _placement(node, qty):

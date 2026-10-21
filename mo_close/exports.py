@@ -110,7 +110,7 @@ def record_rows(pl, only_open=False):
                         _who(row.final_confirmed_by),
                         _dt(row.final_confirmed_at),
                         row.final_comment,
-                        f"{mo.source_fix} → {mo.source_so}" if is_mo and mo.source_fix else "",
+                        f"{mo.source_fix} → {mo.source_so} ({mo.source_fix_hint})" if is_mo and mo.source_fix else "",
                     ],
                 }
             )

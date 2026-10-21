@@ -9,7 +9,7 @@
     <td class="text-end fw-semibold">{% if mo.on_packing_list %}{{ qty|qty }}{% else %}—{% endif %}</td>
     <td class="ref-cell"><span class="fw-bold">{{ mo.reference }}</span>
       <div class="small-note">MO qty {{ mo.product_qty|qty }}{% if mo.on_packing_list and mo.product_qty != qty %} <i class="bi bi-info-circle" title="MO quantity differs from the packing list quantity — one MO can cover the parent and an additional packing list"></i>{% endif %}</div>{% with fix=mo.source_fix %}{% if fix %}
-      <div><span class="pill pill-sm tone-orange" title="Odoo Source: {{ mo.origin }} — the SO should be written {{ mo.source_so }}. Please correct the Source in Odoo.">Source fix: {{ fix }} → {{ mo.source_so }}</span></div>{% endif %}{% endwith %}</td>
+      <div><span class="pill pill-sm tone-orange" title="Odoo Source: {{ mo.origin }} — the SO should be written {{ mo.source_so }}. Please correct the Source in Odoo.">Source fix: {{ fix }} → {{ mo.source_so }}</span>{% if mo.source_fix_hint %}<div class="small-note">{{ mo.source_fix_hint }}</div>{% endif %}</div>{% endif %}{% endwith %}</td>
     <td>{% state_pill mo %}</td>
     <td>{% include "mo_close/_row_progress.html" with p=mo.row_progress %}</td>
     {% for sf in mo.sf_marks %}{% include "mo_close/_sf_cell.html" %}{% endfor %}

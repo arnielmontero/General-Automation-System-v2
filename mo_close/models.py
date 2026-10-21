@@ -114,6 +114,25 @@ def so_is_customer_code(so, sources):
     return False
 
 
+def so_fix_hint(wrong):
+    """What is wrong in an SO spelling, in words — 'SO4743' and 'S04743' look the same in many fonts."""
+    w = re.sub(r"[\s#.:-]", "", wrong)
+    hints = []
+    if "O" in w.upper():
+        hints.append("letter O instead of zero")
+    if not w.upper().startswith("S"):
+        hints.append("S missing")
+    elif w.upper().startswith("SS"):
+        hints.append("double S")
+    elif not re.match(r"S[O0]", w, re.IGNORECASE):
+        hints.append("0 missing after the S")
+    if w != w.upper():
+        hints.append("lowercase")
+    if w != wrong:
+        hints.append("extra characters")
+    return ", ".join(hints)
+
+
 def so_source_fix(so, source):
     """The wrong spelling of the SO in an MO Source ('SO8027'), or '' when it is written correctly."""
     found = so_in_source(so, source)
@@ -566,6 +585,12 @@ class MORecord(TrackedRow):
     def source_fix(self):
         """Fix flag: the SO is written wrong in the Odoo Source (e.g. 'SO8027' instead of 'S08027')."""
         return so_source_fix(self.source_so, self.origin)
+
+    @property
+    def source_fix_hint(self):
+        """'letter O instead of zero' for 'SO4743', … ('' when the Source is right)."""
+        fix = self.source_fix
+        return so_fix_hint(fix) if fix else ""
 
 
 class TransferRecord(TrackedRow):

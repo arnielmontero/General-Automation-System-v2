@@ -162,6 +162,7 @@ class WorkflowTests(TestCase):
         self.assertContains(resp, "NRNF-105NS-BL-Z")  # in "No MO found"
         self.assertContains(resp, "Component · not on packing list")
         self.assertContains(resp, "Source fix: SO4743 → S04743")
+        self.assertContains(resp, "the Source says <span class=\"mono fw-semibold\">SO4743</span> (<b>letter O instead of zero</b>)")
         self.assertContains(resp, "PL1/SFP/16273")
 
     def test_so_in_source_spellings_and_fix_flag(self):
@@ -189,6 +190,12 @@ class WorkflowTests(TestCase):
         self.assertEqual(so_source_fix("S08027", "s08027"), "s08027")
         self.assertEqual(so_source_fix("S08027", "CU for 8027 - Sawo"), "8027")
         self.assertEqual(so_source_fix("S08027", "SS08027-UKRAINE"), "SS08027")
+        # The flag says in words what is wrong: SO8027 and S08027 look the same in many fonts.
+        from mo_close.models import so_fix_hint
+
+        self.assertEqual([so_fix_hint(w) for w in ["SO8027", "So8027", "S8027", "08027", "SS08027", "SO# 08027"]],
+                         ["letter O instead of zero", "letter O instead of zero, lowercase", "0 missing after the S",
+                          "S missing", "double S", "letter O instead of zero, extra characters"])
 
     def test_so_bare_number_is_not_a_customer_code_model_or_year(self):
         from mo_close.models import so_in_source, so_is_customer_code
