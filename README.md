@@ -44,7 +44,57 @@ address to `CSRF_TRUSTED_ORIGINS` in `.env` and run `docker compose up -d` again
 | Logs | `docker compose logs -f web` |
 | Tests | `docker compose run --rm web python manage.py test` |
 | Stop | `docker compose down` (data is kept in the `db_data` and `media` volumes) |
-| Backup database | `docker compose exec db pg_dump -U gas gas > backup.sql` |
+| Backup database | see [Backup](#backup) below |
+
+## Update to a new version (keep the data)
+
+The database and the uploaded PDFs live in the Docker volumes `db_data` and `media`, not in the containers.
+Rebuilding the web container replaces only the program code; the data stays.
+
+1. **Pull** the new version: `git pull`
+2. **Back up** the data first — see [Backup](#backup).
+3. **Rebuild only the web container** (the database container is not touched; new migrations run on start):
+   ```bash
+   docker compose up -d --build --no-deps web
+   ```
+4. **Check**: `docker compose logs web --tail 20` shows `Applying … OK` for new migrations (or none) and
+   `Listening at`; `docker compose exec web python manage.py showmigrations` shows every line `[X]`; open the site.
+
+Before updating, read any new files in `*/migrations/`: `AddField`, `CreateModel` and data-adding steps are safe;
+`RemoveField`, `DeleteModel` or `RunSQL` that deletes rows remove data — stop and check first.
+
+> **Never** run `docker compose down -v`, `docker volume rm …`, `docker volume prune` or
+> `docker system prune --volumes` — they **delete the database and the uploaded files**.
+> Plain `docker compose down` (without `-v`) is safe.
+
+## Backup
+
+Backups go in the `DatabaseBackup/` folder (kept out of git and the Docker image). Use a new folder name each time
+(date and time), e.g. `DatabaseBackup/20261021-0933`:
+
+```bash
+mkdir DatabaseBackup/20261021-0933
+docker compose exec db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f /tmp/db.dump'
+docker cp general-automation-system-db-1:/tmp/db.dump DatabaseBackup/20261021-0933/database.dump
+docker compose exec db rm /tmp/db.dump
+docker compose exec web sh -c 'tar -cf /tmp/media.tar -C /app media'
+docker cp general-automation-system-web-1:/tmp/media.tar DatabaseBackup/20261021-0933/media.tar
+docker compose exec web rm /tmp/media.tar
+```
+
+`database.dump` is the whole database, `media.tar` the uploaded packing list PDFs. Keep a copy of `.env` too
+(it is not in the backup).
+
+**Restore** (replaces the current data with the backup):
+
+```bash
+docker compose stop web
+docker cp DatabaseBackup/20261021-0933/database.dump general-automation-system-db-1:/tmp/db.dump
+docker compose exec db sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner /tmp/db.dump && rm /tmp/db.dump'
+docker cp DatabaseBackup/20261021-0933/media.tar general-automation-system-web-1:/tmp/media.tar
+docker compose start web
+docker compose exec web sh -c 'tar -xf /tmp/media.tar -C /app && rm /tmp/media.tar'
+```
 
 ## Layout
 
