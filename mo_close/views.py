@@ -1,3 +1,5 @@
+import re
+
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
@@ -341,35 +343,34 @@ def record_detail(request, pk):
         f = "all"
 
     tree = _tree_with_documents(pl)
-    position = {n.pk: i for i, n in enumerate(tree)}
-    by_pk = {n.pk: n for n in tree}
-    root_pk = tree[0].pk if tree else None
     mos = list(
         pl.mos.select_related(*MO_RELATED).prefetch_related(
             "transfers__user_done_by", "transfers__final_confirmed_by"
         )
     )
-    # MOs by SO (parent first, children under it); within an SO the packing list items, then components.
-    mos.sort(key=lambda mo: (position.get(mo.sales_order_id or root_pk, 0), not mo.on_packing_list))
-    groups, last = [], (None, None)
-    for mo in mos:
+    # MOs by SO (parent first, children under it); within an SO the packing list items, then components. An MO
+    # serving the parent and an additional packing list (S04743 + S04743-1) is listed under both.
+    groups, last, placed = [], (None, None), {}
+    for mo, node, qty in pl.mo_placements(mos, tree):
+        node_pk = node.pk if node else None
+        if mo.on_packing_list:
+            placed.setdefault(node_pk, set()).add(norm_code(mo.fg_code))
         transfers = list(mo.transfers.all())
         shown = [t for t in transfers if _row_matches(t, f)]
         if not (_row_matches(mo, f) or shown):
             continue
-        node_pk = mo.sales_order_id or root_pk
         groups.append(
             {
                 "mo": mo,
                 "transfers": transfers if f == "all" else shown,
-                "so_head": by_pk.get(node_pk) if len(tree) > 1 and node_pk != last[0] else None,
+                **_placement(node, qty),
+                "so_head": node if len(tree) > 1 and node_pk != last[0] else None,
                 "comp_head": not mo.on_packing_list and (node_pk != last[0] or last[1]),
             }
         )
         last = (node_pk, mo.on_packing_list)
 
-    matched_codes = {norm_code(mo.fg_code) for mo in mos if mo.on_packing_list}
-    unmatched = [(node, g) for node in tree for g in node.groups if g["norm"] not in matched_codes]
+    unmatched = [(node, g) for node in tree for g in node.groups if g["norm"] not in placed.get(node.pk, set())]
     counts = services.progress_counts([pl])[pl.pk]
     return render(
         request,
@@ -530,11 +531,22 @@ def sf_action(request, pk, team, action):
     return _group_response(request, mo, error, error_kind="sf", error_pk=team)
 
 
+def _placement(node, qty):
+    """Group keys for an MO listed under ``node``: its SO, the packing list qty and the id of this copy."""
+    return {"so_number": node.so_number, "qty": qty, "gid": node.pk} if node else {}
+
+
 def _group_response(request, mo, error, **error_at):
-    """The MO group (MO row + transfers) re-rendered after an action, or back to the record without HTMX."""
+    """The MO group (MO row + transfers) re-rendered after an action, or back to the record without HTMX.
+    An MO listed under more than one SO (parent + additional packing list) reloads the page after a change,
+    so every copy shows it."""
     mo = MORecord.objects.select_related(*MO_RELATED).get(pk=mo.pk)
+    placements = mo.packing_list.mo_placements([mo])
+    # The copy that was clicked (record page ids end with its SO: mo-group-<mo>-<SO>); other pages use mo-group-<mo>.
+    target = re.match(r"mo-group-\d+-(\d+)$", request.headers.get("HX-Target", ""))
+    place = next((p for p in placements if target and p[1] and str(p[1].pk) == target.group(1)), None)
     context = {
-        "group": {"mo": mo, "transfers": list(mo.transfers.select_related(*ROW_RELATED))},
+        "group": {"mo": mo, "transfers": list(mo.transfers.select_related(*ROW_RELATED)), **(_placement(*place[1:]) if place else {})},
         "pl": mo.packing_list,
         "link_so": request.headers.get("HX-Current-URL", "").split("?")[0].rstrip("/").endswith("/records"),
         "error": error,
@@ -543,6 +555,8 @@ def _group_response(request, mo, error, **error_at):
     if request.headers.get("HX-Request"):
         response = render(request, "mo_close/_mo_group.html", context)
         response["HX-Trigger"] = "progressChanged"
+        if len(placements) > 1 and not error:
+            response["HX-Refresh"] = "true"
         return response
     if error:
         messages.error(request, error)

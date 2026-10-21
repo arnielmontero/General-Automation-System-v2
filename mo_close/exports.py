@@ -76,12 +76,14 @@ def _so_label(pl):
 
 
 def record_rows(pl, only_open=False):
-    """Flat rows: each MO followed by its transfers."""
+    """Flat rows: each MO followed by its transfers, by SO as on the record page (an MO serving the parent and an
+    additional packing list is listed under both, each with its own qty)."""
     out = []
     mos = pl.mos.select_related("packing_list", "sales_order", "user_done_by", "final_confirmed_by").prefetch_related(
         "transfers__user_done_by", "transfers__final_confirmed_by"
     )
-    for mo in mos:
+    for mo, node, qty in pl.mo_placements(list(mos)):
+        so = node.so_number if node else mo.so_number
         for row in [mo, *mo.transfers.all()]:
             if only_open and row.final_confirmed:
                 continue
@@ -91,11 +93,11 @@ def record_rows(pl, only_open=False):
                     "row": row,
                     "stage": _stage(row),
                     "values": [
-                        mo.so_number,
+                        so,
                         mo.fg_code,
                         (mo.fg_description if mo.on_packing_list else f"{mo.fg_description} (component — not on packing list)")
                         if is_mo else "",
-                        _num(mo.qty) if is_mo and mo.on_packing_list else None,
+                        _num(qty) if is_mo and mo.on_packing_list else None,
                         "MO" if is_mo else (row.type_code or "Transfer"),
                         row.reference,
                         row.state_label,
@@ -108,7 +110,7 @@ def record_rows(pl, only_open=False):
                         _who(row.final_confirmed_by),
                         _dt(row.final_confirmed_at),
                         row.final_comment,
-                        f"{mo.source_fix} → {mo.so_number}" if is_mo and mo.source_fix else "",
+                        f"{mo.source_fix} → {mo.source_so}" if is_mo and mo.source_fix else "",
                     ],
                 }
             )

@@ -379,7 +379,14 @@ def generate_from_odoo(request, pl, client):
             product_id, product_label = _m2o(m["product_id"])
             product = products.get(product_id) or {}
             code = product.get("default_code") or ""
-            group = node_groups[node.pk].get(norm_code(code)) or groups.get(norm_code(code))  # own SO first
+            norm = norm_code(code)
+            if norm not in node_groups[node.pk] and node.so_number == so_root(node.so_number):
+                # The Source names the S0 (S04743); the product is only on an additional packing list of it (S04743-1).
+                node = next(
+                    (n for n in nodes if n.depth and so_root(n.so_number) == node.so_number and norm in node_groups[n.pk]),
+                    node,
+                )
+            group = node_groups[node.pk].get(norm) or groups.get(norm)  # own SO first
             on_packing_list = group is not None
             if not on_packing_list:
                 # MO of this SO for a product that is not on the packing list (component / sub-assembly).

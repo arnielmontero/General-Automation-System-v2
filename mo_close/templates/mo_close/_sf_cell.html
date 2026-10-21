@@ -8,7 +8,7 @@
         data-sf-message="Uncheck {{ sf.label }} done on {{ mo.reference }}?"
       {% else %}data-sf-url="{% url 'mo_close:sf_action' mo.pk sf.team 'check' %}"
         data-sf-message="Mark {{ sf.label }} done on {{ mo.reference }}? Once checked, only an Admin can uncheck it."{% endif %}
-      data-sf-title="{{ sf.label }}" data-sf-target="#mo-group-{{ mo.pk }}"
+      data-sf-title="{{ sf.label }}" data-sf-target="#mo-group-{{ mo.pk }}{% if gid %}-{{ gid }}{% endif %}"
       {% if sf.done and "mo_close.sf_undo" not in modules %}title="Only an Admin can uncheck this"{% endif %}>
     <label class="form-check-label small" for="sf-{{ sf.team }}-{{ mo.pk }}">Done</label>
   </div>

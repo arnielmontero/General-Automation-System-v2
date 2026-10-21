@@ -233,6 +233,34 @@ class PackingList(PackingHeader):
         walk(None, 0)
         return out
 
+    def mo_placements(self, mos, tree=None):
+        """Where each MO is listed: [(mo, SO node, qty)], parent SO first, each child under it, within an SO the
+        packing list items then the components. A child named after its parent (S04743-1) is an additional packing
+        list of the same Odoo Sales Order (S04743), whose MOs say S04743 in their Source: such an MO is listed under
+        every SO of that S0 whose packing list has its product, with that SO's qty — one MO can serve both
+        (MO qty 30 = 10 on S04743 + 20 on S04743-1). It is the same MO row, so ticks and confirmations are shared.
+        An MO whose Source names the child itself, or a component, is listed under its own SO only."""
+        tree = self.so_tree() if tree is None else tree
+        if not tree:
+            return [(mo, None, mo.qty) for mo in mos]
+        position = {n.pk: i for i, n in enumerate(tree)}
+        by_pk = {n.pk: n for n in tree}
+        for n in tree:
+            if not hasattr(n, "groups"):
+                n.groups = n.grouped_lines()
+        qty = {n.pk: {g["norm"]: g["qty"] for g in n.groups if g["norm"]} for n in tree}
+        out = []
+        for mo in mos:
+            owner = by_pk.get(mo.sales_order_id) or tree[0]
+            code = norm_code(mo.fg_code)
+            places = [owner]
+            if mo.on_packing_list and not (owner.so_number != so_root(owner.so_number) and so_in_source(owner.so_number, mo.origin)):
+                root = so_root(owner.so_number)
+                places = [n for n in tree if so_root(n.so_number) == root and code in qty[n.pk]] or [owner]
+            out.extend((mo, n, qty[n.pk].get(code, mo.qty) if mo.on_packing_list else mo.qty) for n in places)
+        out.sort(key=lambda p: (position[p[1].pk], not p[0].on_packing_list))  # stable: MO order kept within
+        return out
+
     @property
     def child_sos(self):
         return self.so_tree()[1:]
@@ -528,9 +556,16 @@ class MORecord(TrackedRow):
         return self.sales_order.so_number if self.sales_order_id else self.packing_list.so_number
 
     @property
+    def source_so(self):
+        """The SO the Odoo Source names: the MO's own SO, or — for an additional packing list named after its
+        parent (S04743-1) — the parent S0 (S04743), the only one Odoo knows."""
+        so = self.so_number
+        return so if so_in_source(so, self.origin) else so_root(so)
+
+    @property
     def source_fix(self):
         """Fix flag: the SO is written wrong in the Odoo Source (e.g. 'SO8027' instead of 'S08027')."""
-        return so_source_fix(self.so_number, self.origin)
+        return so_source_fix(self.source_so, self.origin)
 
 
 class TransferRecord(TrackedRow):

@@ -78,7 +78,7 @@
       {% else %}
         {% if source_fixes %}<div class="card-body-soft small pb-0"><span class="pill pill-sm tone-orange">Source fix</span>
           {{ source_fixes|length }} MO{{ source_fixes|length|pluralize }} {{ source_fixes|length|pluralize:"has,have" }} the SO written wrong in the Odoo Source ({% for mo in source_fixes %}{{ mo.reference }}: <span class="mono">{{ mo.source_fix }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}).
-          The system auto-corrected {{ source_fixes|length|pluralize:"it,them" }} ({% for mo in source_fixes %}<span class="mono fw-semibold">{{ mo.so_number }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}) — please correct the Source in Odoo.</div>{% endif %}
+          The system auto-corrected {{ source_fixes|length|pluralize:"it,them" }} ({% for mo in source_fixes %}<span class="mono fw-semibold">{{ mo.source_so }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}) — please correct the Source in Odoo.</div>{% endif %}
         <div class="table-responsive">
           <table class="table table-soft table-compact">
             <thead><tr><th>SO#</th><th>FG Code</th><th>FG</th><th class="text-end">Qty</th><th>MO / Transfer</th><th>State</th><th>Progress</th><th>SF-Innova</th><th>SF-Electrical</th><th>Marked done</th><th>System check</th><th>Final confirmation</th></tr></thead>

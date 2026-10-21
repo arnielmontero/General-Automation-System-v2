@@ -11,7 +11,8 @@ from django.urls import reverse
 
 from core.models import AuditLog, Role, User
 from core.odoo import OdooAuthError
-from mo_close.models import MORecord, PackingList, TransferRecord
+from mo_close import exports
+from mo_close.models import MORecord, PackingLine, PackingList, TransferRecord
 
 from .fake_odoo import FakeOdoo
 
@@ -479,6 +480,41 @@ class WorkflowTests(TestCase):
         self.assertContains(self.client.get(reverse("mo_close:progress"), {"q": "4743-1"}), "S04743")
         for fmt, magic in (("xlsx", b"PK"), ("pdf", b"%PDF")):
             self.assertTrue(self.client.get(reverse("mo_close:record_export", args=[pl.pk, fmt])).content.startswith(magic))
+
+    def test_additional_packing_list_uses_parent_s0_mos(self):
+        # S04743-1 is an additional packing list of S04743: its MOs say S04743 in the Odoo Source.
+        pl = self.save_and_generate()
+        self.add(pl, "4743-1")
+        self.save_preview(pl)
+        root, child = pl.sales_orders.get(parent=None), pl.sales_orders.get(so_number="S04743-1")
+        self.client.post(reverse("mo_close:record_generate", args=[pl.pk]))
+        detail = reverse("mo_close:record_detail", args=[pl.pk])
+
+        # An MO for a product on both packing lists is listed under both SOs (same row), each with its own qty.
+        shared = MORecord.objects.get(reference="PL3/MO/06873")
+        self.assertEqual(shared.sales_order, root)
+        groups = self.client.get(detail).context["groups"]
+        self.assertEqual([g["so_number"] for g in groups if g["mo"] == shared], ["S04743", "S04743-1"])
+        self.assertEqual([g["so_number"] for g in groups if g["mo"].reference == "PL1/MO/40001"], ["S04743-1"])  # Source names the child
+        self.assertEqual([g["so_number"] for g in groups if g["mo"].reference == "PL3/MO/09999"], ["S04743"])  # component
+        unmatched = [(n.so_number, g["norm"]) for n, g in self.client.get(detail).context["unmatched"]]
+        self.assertNotIn(("S04743-1", "NRNS60NSBLZC"), unmatched)  # "No MO found" counts the shared MO for the child
+        # A change on a shared MO reloads the page so both copies show it; the copy that was clicked is re-rendered.
+        resp = self.client.post(reverse("mo_close:row_action", args=["mo", shared.pk, "mark"]),
+                                HTTP_HX_REQUEST="true", HTTP_HX_TARGET=f"mo-group-{shared.pk}-{child.pk}")
+        self.assertEqual(resp["HX-Refresh"], "true")
+        self.assertContains(resp, f'id="mo-group-{shared.pk}-{child.pk}"')
+        self.assertContains(self.client.get(detail), f'id="mo-group-{shared.pk}-{root.pk}"')
+        self.assertTrue(xlsx_rows := [r for r in exports.record_rows(pl) if r["row"] == shared])
+        self.assertEqual([r["values"][0] for r in xlsx_rows], ["S04743", "S04743-1"])
+
+        # A product only on the additional packing list: its MO (Source S04743) belongs to S04743-1, no Source fix.
+        PackingLine.objects.filter(document__sales_order=root, external_code="NRNS-60NS-BL-Z-C").delete()
+        self.client.post(reverse("mo_close:record_generate", args=[pl.pk]))
+        shared.refresh_from_db()
+        self.assertEqual((shared.so_number, shared.source_so, shared.source_fix), ("S04743-1", "S04743", ""))
+        comp = MORecord.objects.get(reference="PL1/MO/34770-002")
+        self.assertEqual((comp.source_so, comp.source_fix), ("S04743", "SO4743"))
 
     def test_cancel_upload_and_remove_packing_list(self):
         pl = self.save_and_generate()

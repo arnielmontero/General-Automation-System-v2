@@ -5,7 +5,7 @@
     <input class="form-check-input" type="checkbox" id="done-{{ kind }}-{{ row.pk }}"
       {% if row.user_done %}checked{% endif %} {% if row.final_confirmed or "mo_close.mark_done" not in modules %}disabled{% endif %}
       hx-post="{% if row.user_done %}{% url 'mo_close:row_action' kind row.pk 'unmark' %}{% else %}{% url 'mo_close:row_action' kind row.pk 'mark' %}{% endif %}"
-      hx-target="#mo-group-{{ mo.pk }}" hx-swap="outerHTML" hx-disabled-elt="this"
+      hx-target="#mo-group-{{ mo.pk }}{% if gid %}-{{ gid }}{% endif %}" hx-swap="outerHTML" hx-disabled-elt="this"
       {% if row.user_done %}hx-confirm="Remove the done mark from {{ row.reference }}?"{% endif %}>
     <label class="form-check-label small" for="done-{{ kind }}-{{ row.pk }}">Done</label>
   </div>
@@ -22,11 +22,11 @@
     {% if row.final_comment %}<div class="small fst-italic">“{{ row.final_comment }}”</div>{% endif %}
     {% if "mo_close.confirm" in modules %}
       <button class="btn btn-link btn-sm p-0 small" hx-post="{% url 'mo_close:row_action' kind row.pk 'unconfirm' %}"
-        hx-target="#mo-group-{{ mo.pk }}" hx-swap="outerHTML" hx-confirm="Remove the final confirmation of {{ row.reference }}?">Undo</button>
+        hx-target="#mo-group-{{ mo.pk }}{% if gid %}-{{ gid }}{% endif %}" hx-swap="outerHTML" hx-confirm="Remove the final confirmation of {{ row.reference }}?">Undo</button>
     {% endif %}
   {% elif row.user_done and "mo_close.confirm" in modules %}
     <form class="d-flex flex-column gap-1 align-items-start" hx-post="{% url 'mo_close:row_action' kind row.pk 'confirm' %}"
-      hx-target="#mo-group-{{ mo.pk }}" hx-swap="outerHTML">
+      hx-target="#mo-group-{{ mo.pk }}{% if gid %}-{{ gid }}{% endif %}" hx-swap="outerHTML">
       {% if row.system_status != "confirmed" %}
         <textarea class="form-control form-control-sm" name="comment" rows="2" placeholder="Comment (required)" title="Odoo does not show Done — explain why you confirm" required></textarea>
       {% endif %}
