@@ -696,8 +696,29 @@ def sf_unmark_done(request, mo, team, comment):
 # --- progress ---------------------------------------------------------------------------------
 
 
-def progress_counts(packing_lists):
-    """{record id: {"total", "marked", "system", "final"}} for MO + transfer rows."""
+def _add_shared_copies(counts):
+    """Add the extra copies of MOs listed under more than one SO (with their transfers) to ``counts``. Only records
+    with an additional packing list (a child SO named after the parent, S04743-1) can have them."""
+    with_children = SalesOrder.objects.filter(record__in=list(counts), parent__isnull=False, so_number__contains="-")
+    for pl in PackingList.objects.filter(pk__in=with_children.values("record")):
+        mos = list(pl.mos.prefetch_related("transfers"))
+        listed = {}
+        for mo, _, _ in pl.mo_placements(mos):
+            listed[mo.pk] = listed.get(mo.pk, 0) + 1
+        c = counts[pl.pk]
+        for mo in mos:
+            extra = listed.get(mo.pk, 1) - 1
+            for row in [mo, *mo.transfers.all()] if extra else []:
+                c["total"] += extra
+                c["marked"] += extra * row.user_done
+                c["system"] += extra * (row.system_status == "confirmed")
+                c["final"] += extra * row.final_confirmed
+
+
+def progress_counts(packing_lists, as_listed=True):
+    """{record id: {"total", "marked", "system", "final"}} for MO + transfer rows. ``as_listed``: as the record page
+    lists them — an MO serving the parent and an additional packing list (S04743 + S04743-1) is listed, and
+    counted, under both with its transfers; False counts each MO / transfer once (Reports)."""
     from django.db.models import Count, Q
 
     counts = {pl.pk: {"total": 0, "marked": 0, "system": 0, "final": 0} for pl in packing_lists}
@@ -716,6 +737,8 @@ def progress_counts(packing_lists):
             c = counts[row[key]]
             for k in aggregates:
                 c[k] += row[k]
+    if as_listed:
+        _add_shared_copies(counts)
     for c in counts.values():
         c["open"] = c["total"] - c["marked"]
         c["percent"] = round(100 * c["final"] / c["total"]) if c["total"] else 0

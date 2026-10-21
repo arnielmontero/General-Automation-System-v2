@@ -212,7 +212,7 @@ def build(f):
             qs = qs.filter(created_at__date__lte=f.date_to)
     records = list(qs.order_by("so_number"))
     ids = [pl.pk for pl in records]
-    counts = progress_counts(records)
+    counts = progress_counts(records, as_listed=False)  # Reports count each MO / transfer once
 
     fields = ["user_done", "final_confirmed", "system_status", "final_confirmed_at", "state"]
     mo_rows = list(MORecord.objects.filter(packing_list__in=ids).values(*fields))

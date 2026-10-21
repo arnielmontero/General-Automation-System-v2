@@ -11,7 +11,7 @@ from django.urls import reverse
 
 from core.models import AuditLog, Role, User
 from core.odoo import OdooAuthError
-from mo_close import exports
+from mo_close import exports, services
 from mo_close.models import MORecord, PackingLine, PackingList, TransferRecord
 
 from .fake_odoo import FakeOdoo
@@ -530,6 +530,14 @@ class WorkflowTests(TestCase):
         self.assertEqual([g["so_number"] for g in groups if g["mo"] == shared], ["S04743", "S04743-1"])
         self.assertEqual([g["so_number"] for g in groups if g["mo"].reference == "PL1/MO/40001"], ["S04743-1"])  # Source names the child
         self.assertEqual([g["so_number"] for g in groups if g["mo"].reference == "PL3/MO/09999"], ["S04743"])  # component
+        # The row count is what the page lists: the shared MO and its transfers count under both SOs.
+        ctx = self.client.get(detail).context
+        listed = sum(1 + len(g["transfers"]) for g in ctx["groups"])
+        self.assertEqual(ctx["progress"]["total"], listed)
+        self.assertContains(self.client.get(detail), f"MO's &amp; Transfers ({listed})")
+        once = services.progress_counts([pl], as_listed=False)[pl.pk]["total"]
+        shared_mos = MORecord.objects.filter(reference__in=["PL3/MO/06873", "PL3/MO/07787"])  # on both packing lists
+        self.assertEqual(listed - once, sum(1 + mo.transfers.count() for mo in shared_mos))
         unmatched = [(n.so_number, g["norm"]) for n, g in self.client.get(detail).context["unmatched"]]
         self.assertNotIn(("S04743-1", "NRNS60NSBLZC"), unmatched)  # "No MO found" counts the shared MO for the child
         # A change on a shared MO reloads the page so both copies show it; the copy that was clicked is re-rendered.
