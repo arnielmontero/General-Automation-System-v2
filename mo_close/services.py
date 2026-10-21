@@ -458,6 +458,56 @@ def unconfirm_final(request, row, comment):
     return row
 
 
+def _sf_team(team):
+    if team not in MORecord.SF_TEAMS:
+        raise ValidationError("Unknown SF column.")
+    return MORecord.SF_TEAMS[team]
+
+
+def sf_mark_done(request, mo, team):
+    """SF-Innova / SF-Electrical checks an MO as done. Once checked, only an Admin can uncheck it."""
+    label, module = _sf_team(team)
+    if not request.user.can(module):
+        raise PermissionDenied
+    if getattr(mo, f"sf_{team}_done"):
+        raise ValidationError(f"{label} is already checked done.")
+    setattr(mo, f"sf_{team}_done", True)
+    setattr(mo, f"sf_{team}_at", timezone.now())
+    setattr(mo, f"sf_{team}_by", request.user)
+    mo.save(update_fields=[f"sf_{team}_done", f"sf_{team}_at", f"sf_{team}_by"])
+    log(request, Section.MARK, f"{label} done", mo.packing_list, target=mo.reference)
+    return mo
+
+
+def sf_unmark_done(request, mo, team, comment):
+    """Admin unchecks SF done; the reason is required, logged and shown on the row. Users can then check again."""
+    label, _ = _sf_team(team)
+    if not request.user.can("mo_close.sf_undo"):
+        raise PermissionDenied
+    if not getattr(mo, f"sf_{team}_done"):
+        raise ValidationError(f"{label} is not checked.")
+    comment = (comment or "").strip()
+    if not comment:
+        raise ValidationError(f"A comment is required to uncheck {label}.")
+    old = f"Done {timezone.localtime(getattr(mo, f'sf_{team}_at')):%d-%b-%Y %H:%M}"
+    by = getattr(mo, f"sf_{team}_by")
+    if by:
+        old += f" by {by.display_name}"
+    values = {
+        "done": False,
+        "at": None,
+        "by": None,
+        "undo_comment": comment,
+        "undo_at": timezone.now(),
+        "undo_by": request.user,
+    }
+    for name, value in values.items():
+        setattr(mo, f"sf_{team}_{name}", value)
+    mo.save(update_fields=[f"sf_{team}_{name}" for name in values])
+    log(request, Section.MARK, f"{label} unchecked", mo.packing_list, target=mo.reference, old=old, comment=comment)
+    return mo
+
+
 # --- progress ---------------------------------------------------------------------------------
 
 

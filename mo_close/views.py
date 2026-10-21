@@ -28,6 +28,26 @@ ROW_FILTERS = {
 }
 
 
+PLANTS = ["PL1", "PL2", "PL3"]
+PLANT_SHOW = {"open": "Open records", "closed": "Closed records", "all": "All records"}
+ROW_RELATED = ["user_done_by", "final_confirmed_by"]
+MO_RELATED = ["packing_list", *ROW_RELATED, *MORecord.SF_RELATED]
+
+
+def _row_q(f, prefix=""):
+    """_row_matches as a database filter (prefix 'transfers__' for the MO's transfers)."""
+    p = lambda **kw: Q(**{prefix + k: v for k, v in kw.items()})  # noqa: E731
+    if f == "open":
+        return p(user_done=False)
+    if f == "waiting":
+        return p(user_done=True, final_confirmed=False)
+    if f == "flag":
+        return p(user_done=True, final_confirmed=False) & ~p(system_status="confirmed")
+    if f == "confirmed":
+        return p(final_confirmed=True)
+    return Q()
+
+
 def _row_matches(row, f):
     if f == "open":
         return not row.user_done
@@ -81,8 +101,17 @@ def dashboard(request):
 # --- Step 1: records -------------------------------------------------------------------------
 
 
+def _plant_counts():
+    """{'PL1': n, …}: MOs of each plant in open records (shown on the tabs)."""
+    open_mos = MORecord.objects.filter(packing_list__status=PackingList.Status.GENERATED)
+    return open_mos.aggregate(**{plant: Count("id", filter=Q(reference__startswith=plant + "/")) for plant in PLANTS})
+
+
 @module_required("mo_close.records")
 def records(request):
+    tab = request.GET.get("tab", "").upper()
+    if tab in PLANTS:
+        return _plant_records(request, tab)
     qs = PackingList.objects.select_related("created_by")
     q = request.GET.get("q", "").strip()
     status = request.GET.get("status", "")
@@ -106,6 +135,67 @@ def records(request):
             "status": status,
             "statuses": PackingList.Status.choices,
             "query": urlencode({"q": q, "status": status}),
+            "plants": PLANTS,
+            "plant_counts": _plant_counts(),
+        },
+    )
+
+
+def _plant_records(request, plant):
+    """Records > PL1 / PL2 / PL3: every MO of that plant (with its transfers) across the records."""
+    show = request.GET.get("show", "open")
+    if show not in PLANT_SHOW:
+        show = "open"
+    f = request.GET.get("f", "all")
+    if f not in ROW_FILTERS:
+        f = "all"
+    q = request.GET.get("q", "").strip()
+
+    qs = MORecord.objects.filter(reference__startswith=plant + "/").exclude(packing_list__status=PackingList.Status.DRAFT)
+    if show == "open":
+        qs = qs.exclude(packing_list__status=PackingList.Status.CLOSED)
+    elif show == "closed":
+        qs = qs.filter(packing_list__status=PackingList.Status.CLOSED)
+    if q:
+        qs = qs.filter(
+            Q(packing_list__so_number__icontains=q)
+            | Q(reference__icontains=q)
+            | Q(fg_code__icontains=q)
+            | Q(fg_description__icontains=q)
+            | Q(transfers__reference__icontains=q)
+        )
+    if f != "all":
+        qs = qs.filter(_row_q(f) | _row_q(f, "transfers__"))
+    qs = (
+        qs.distinct()
+        .select_related(*MO_RELATED)
+        .prefetch_related("transfers__user_done_by", "transfers__final_confirmed_by")
+        .order_by("-packing_list__created_at", "-on_packing_list", "fg_code", "reference")
+    )
+    page = Paginator(qs, 20).get_page(request.GET.get("page"))
+    groups = []
+    for mo in page.object_list:
+        transfers = list(mo.transfers.all())
+        groups.append({"mo": mo, "transfers": transfers if f == "all" else [t for t in transfers if _row_matches(t, f)]})
+
+    base = {"tab": plant, "show": show, "f": f, "q": q}
+    return render(
+        request,
+        "mo_close/records.html",
+        {
+            "plant": plant,
+            "plants": PLANTS,
+            "plant_counts": _plant_counts(),
+            "page": page,
+            "groups": groups,
+            "q": q,
+            "f": f,
+            "filters": ROW_FILTERS,
+            "show": show,
+            "show_choices": PLANT_SHOW,
+            "filter_urls": {key: "?" + urlencode({**base, "f": key}) for key in ROW_FILTERS},
+            "query": urlencode(base),
+            "link_so": True,
         },
     )
 
@@ -160,7 +250,7 @@ def record_detail(request, pk):
         f = "all"
 
     mos = list(
-        pl.mos.select_related("user_done_by", "final_confirmed_by").prefetch_related(
+        pl.mos.select_related(*MO_RELATED).prefetch_related(
             "transfers__user_done_by", "transfers__final_confirmed_by"
         )
     )
@@ -281,14 +371,38 @@ def row_action(request, kind, pk, action):
     except PermissionDenied:
         error = "Your role does not allow this."
 
-    mo = row if kind == "mo" else row.mo
-    mo = MORecord.objects.select_related("packing_list", "user_done_by", "final_confirmed_by").get(pk=mo.pk)
+    return _group_response(request, row if kind == "mo" else row.mo, error, error_kind=kind, error_pk=pk)
+
+
+@require_POST
+@module_required("mo_close.records")
+def sf_action(request, pk, team, action):
+    """Check / uncheck SF-Innova or SF-Electrical done on an MO (asked with a Yes / No popup first)."""
+    if team not in MORecord.SF_TEAMS or action not in ("check", "uncheck"):
+        raise Http404
+    mo = get_object_or_404(MORecord.objects.select_related(*MO_RELATED), pk=pk)
+    error = ""
+    try:
+        if action == "check":
+            services.sf_mark_done(request, mo, team)
+        else:
+            services.sf_unmark_done(request, mo, team, request.POST.get("comment", ""))
+    except ValidationError as exc:
+        error = " ".join(exc.messages)
+    except PermissionDenied:
+        error = "Your role does not allow this."
+    return _group_response(request, mo, error, error_kind="sf", error_pk=team)
+
+
+def _group_response(request, mo, error, **error_at):
+    """The MO group (MO row + transfers) re-rendered after an action, or back to the record without HTMX."""
+    mo = MORecord.objects.select_related(*MO_RELATED).get(pk=mo.pk)
     context = {
-        "group": {"mo": mo, "transfers": list(mo.transfers.select_related("user_done_by", "final_confirmed_by"))},
+        "group": {"mo": mo, "transfers": list(mo.transfers.select_related(*ROW_RELATED))},
         "pl": mo.packing_list,
+        "link_so": request.headers.get("HX-Current-URL", "").split("?")[0].rstrip("/").endswith("/records"),
         "error": error,
-        "error_kind": kind,
-        "error_pk": pk,
+        **error_at,
     }
     if request.headers.get("HX-Request"):
         response = render(request, "mo_close/_mo_group.html", context)

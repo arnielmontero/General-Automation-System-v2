@@ -1,13 +1,57 @@
 {% extends "base.html" %}
-{% load mo_close_tags %}
-{% block title %}Records{% endblock %}
+{% load mo_close_tags static %}
+{% block title %}{% if plant %}{{ plant }} · {% endif %}Records{% endblock %}
 {% block page_kicker %}MO's To Be Close{% endblock %}
 {% block page_title %}Records{% endblock %}
 {% block header_actions %}
   {% if "mo_close.create" in modules %}<a class="btn btn-primary btn-sm" href="{% url 'mo_close:record_new' %}"><i class="bi bi-plus-lg"></i> New Record</a>{% endif %}
 {% endblock %}
 {% block content %}
-<div class="card-soft">
+<ul class="nav nav-tabs mb-0">
+  <li class="nav-item"><a class="nav-link {% if not plant %}active{% endif %}" href="{% url 'mo_close:records' %}">Records</a></li>
+  {% for p in plants %}
+    <li class="nav-item"><a class="nav-link {% if plant == p %}active{% endif %}" href="?tab={{ p }}" title="MOs of plant {{ p }} in open records: {{ plant_counts|get_item:p }}">{{ p }} <span class="small-note">({{ plant_counts|get_item:p }})</span></a></li>
+  {% endfor %}
+</ul>
+
+{% if plant %}
+<div class="card-soft" style="border-top-left-radius:0">
+  <div class="card-head">
+    <h2>{{ plant }} — MO's &amp; Transfers ({{ page.paginator.count }} MO{{ page.paginator.count|pluralize }})</h2>
+    <form method="get" class="d-flex gap-2 flex-wrap">
+      <input type="hidden" name="tab" value="{{ plant }}"><input type="hidden" name="f" value="{{ f }}">
+      <input class="form-control form-control-sm" type="search" name="q" value="{{ q }}" placeholder="SO, MO, transfer, FG code…">
+      <select name="show" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+        {% for value, label in show_choices.items %}<option value="{{ value }}" {% if show == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+      <button class="btn btn-soft btn-sm">Search</button>
+    </form>
+  </div>
+  <div class="card-body-soft pt-0 pb-2">
+    <div class="btn-group btn-group-sm flex-wrap">
+      {% for key, label in filters.items %}
+        <a class="btn {% if f == key %}btn-primary{% else %}btn-soft{% endif %}" href="{{ filter_urls|get_item:key }}">{{ label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-soft table-compact">
+      <thead><tr><th>SO#</th><th>FG Code</th><th>FG</th><th class="text-end">Qty</th><th>MO / Transfer</th><th>State</th><th>Progress</th><th>SF-Innova</th><th>SF-Electrical</th><th>Marked done</th><th>System check</th><th>Final confirmation</th></tr></thead>
+      {% for group in groups %}
+        {% include "mo_close/_mo_group.html" %}
+      {% empty %}
+        <tbody><tr><td colspan="12" class="text-center muted py-4">No {{ plant }} MO's for this filter.</td></tr></tbody>
+      {% endfor %}
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>{% if page.paginator.count %}Showing {{ page.start_index }} to {{ page.end_index }} of {{ page.paginator.count }} MO's{% endif %}</span>
+    {% include "_pagination.html" %}
+  </div>
+</div>
+{% include "mo_close/_sf_modal.html" %}
+{% else %}
+<div class="card-soft" style="border-top-left-radius:0">
   <div class="card-head">
     <h2>Records ({{ page.paginator.count }})</h2>
     <form method="get" class="d-flex gap-2 flex-wrap">
@@ -47,4 +91,6 @@
     {% include "_pagination.html" %}
   </div>
 </div>
+{% endif %}
 {% endblock %}
+{% block scripts %}{% if plant %}<script src="{% static 'js/sf-done.js' %}"></script>{% endif %}{% endblock %}

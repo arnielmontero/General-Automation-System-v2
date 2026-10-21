@@ -1,7 +1,7 @@
-{% load mo_close_tags %}{% with mo=group.mo %}
+{% load mo_close_tags %}{% with mo=group.mo %}{% with pl=mo.packing_list %}
 <tbody class="mo-group" id="mo-group-{{ mo.pk }}">
   <tr class="mo-row {% if mo.user_done and mo.system_status != 'confirmed' and not mo.final_confirmed %}row-flag{% endif %}">
-    <td>{{ pl.so_number }}</td>
+    <td>{% if link_so %}<a class="fw-semibold" href="{% url 'mo_close:record_detail' pl.pk %}">{{ pl.so_number }}</a>{% else %}{{ pl.so_number }}{% endif %}</td>
     <td class="mono fw-semibold text-nowrap">{{ mo.fg_code }}</td>
     <td style="min-width: 170px">{{ mo.fg_description }}{% if not mo.on_packing_list %}
       <div><span class="pill pill-sm tone-purple" title="Made for {{ pl.so_number }} (MO Source), but this product is not on the packing list">Component · not on packing list</span></div>{% endif %}</td>
@@ -10,6 +10,8 @@
       <div class="small-note">MO qty {{ mo.product_qty|qty }}{% if mo.on_packing_list and mo.product_qty != mo.qty %} <i class="bi bi-info-circle" title="MO quantity differs from the packing list quantity"></i>{% endif %}</div>{% with fix=mo.source_fix %}{% if fix %}
       <div><span class="pill pill-sm tone-orange" title="Odoo Source: {{ mo.origin }} — the SO should be written {{ pl.so_number }}. Please correct the Source in Odoo.">Source fix: {{ fix }} → {{ pl.so_number }}</span></div>{% endif %}{% endwith %}</td>
     <td>{% state_pill mo %}</td>
+    <td>{% include "mo_close/_row_progress.html" with p=mo.row_progress %}</td>
+    {% for sf in mo.sf_marks %}{% include "mo_close/_sf_cell.html" %}{% endfor %}
     {% include "mo_close/_row_tracking.html" with row=mo kind="mo" %}
   </tr>
   {% for tr in group.transfers %}
@@ -17,10 +19,12 @@
     <td colspan="4" class="small-note text-end">{{ tr.type_name|default:"Transfer" }}</td>
     <td class="ref-cell mono">{{ tr.reference }}</td>
     <td>{% state_pill tr %}</td>
+    <td>{% include "mo_close/_row_progress.html" with p=tr.row_progress %}</td>
+    <td></td><td></td>
     {% include "mo_close/_row_tracking.html" with row=tr kind="transfer" %}
   </tr>
   {% empty %}
-  <tr class="tr-row"><td colspan="4"></td><td class="ref-cell small-note" colspan="5">No open transfers</td></tr>
+  <tr class="tr-row"><td colspan="4"></td><td class="ref-cell small-note" colspan="8">No open transfers</td></tr>
   {% endfor %}
 </tbody>
-{% endwith %}
+{% endwith %}{% endwith %}

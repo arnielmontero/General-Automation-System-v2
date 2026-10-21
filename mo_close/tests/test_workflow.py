@@ -293,6 +293,94 @@ class WorkflowTests(TestCase):
         self.assertFalse(mo.user_done)
         self.assertEqual(mo.system_status, "")
 
+    # --- SF-Innova / SF-Electrical ---
+    def sf(self, mo, team, action, **data):
+        return self.client.post(reverse("mo_close:sf_action", args=[mo.pk, team, action]), data, HTTP_HX_REQUEST="true")
+
+    def test_sf_done_user_checks_only_admin_unchecks_with_comment(self):
+        pl = self.save_and_generate()
+        mo = pl.mos.get(reference="PL3/MO/06873")
+        resp = self.sf(mo, "electrical", "check")
+        self.assertContains(resp, 'id="mo-group-%d"' % mo.pk)
+        mo.refresh_from_db()
+        self.assertEqual((mo.sf_electrical_done, mo.sf_electrical_by, mo.sf_innova_done), (True, self.user, False))
+        self.assertContains(self.sf(mo, "electrical", "check"), "already checked done")
+
+        # A user cannot uncheck.
+        self.assertContains(self.sf(mo, "electrical", "uncheck", comment="oops"), "Your role does not allow this.")
+        mo.refresh_from_db()
+        self.assertTrue(mo.sf_electrical_done)
+
+        # Admin can, only with a reason; the reason is logged and shown on the row.
+        admin = User.objects.create(username="admin@sawo.com", first_name="Ada", role=Role.admin())
+        self.client.force_login(admin)
+        self.assertContains(self.sf(mo, "electrical", "uncheck", comment="  "), "A comment is required")
+        resp = self.sf(mo, "electrical", "uncheck", comment="Wiring not finished")
+        self.assertContains(resp, "Wiring not finished")
+        mo.refresh_from_db()
+        self.assertEqual((mo.sf_electrical_done, mo.sf_electrical_by, mo.sf_electrical_undo_by), (False, None, admin))
+        log = AuditLog.objects.get(action="SF-Electrical unchecked")
+        self.assertEqual((log.target, log.comment), ("PL3/MO/06873", "Wiring not finished"))
+        self.assertIn("Ana", log.old_value)
+
+        # The user can check it again; the admin's reason stays visible.
+        self.client.force_login(self.user)
+        self.sf(mo, "electrical", "check")
+        mo.refresh_from_db()
+        self.assertTrue(mo.sf_electrical_done)
+        self.assertContains(self.client.get(reverse("mo_close:record_detail", args=[pl.pk])), "Wiring not finished")
+        self.assertEqual(self.sf(mo, "bogus", "check").status_code, 404)
+
+    def test_sf_done_needs_module(self):
+        pl = self.save_and_generate()
+        role = Role.objects.create(name="Viewer", modules=["mo_close.records", "mo_close.sf_innova"])
+        self.client.force_login(User.objects.create(username="v@sawo.com", role=role))
+        mo = pl.mos.first()
+        self.assertContains(self.sf(mo, "electrical", "check"), "Your role does not allow this.")
+        self.sf(mo, "innova", "check")
+        mo.refresh_from_db()
+        self.assertEqual((mo.sf_innova_done, mo.sf_electrical_done), (True, False))
+
+    # --- Records > PL1 / PL2 / PL3 ---
+    def test_records_plant_tabs(self):
+        pl = self.save_and_generate()
+        resp = self.client.get(reverse("mo_close:records"))
+        self.assertContains(resp, "PL1 <span")
+        self.assertEqual(resp.context["plant_counts"], {"PL1": 1, "PL2": 0, "PL3": 3})
+
+        resp = self.client.get(reverse("mo_close:records"), {"tab": "pl3"})
+        refs = [g["mo"].reference for g in resp.context["groups"]]
+        self.assertEqual(sorted(refs), ["PL3/MO/06873", "PL3/MO/07787", "PL3/MO/09999"])
+        self.assertContains(resp, "PL3/SFP/04631")
+        self.assertContains(resp, "0/3")  # per-row progress
+        self.assertContains(resp, reverse("mo_close:record_detail", args=[pl.pk]))
+
+        resp = self.client.get(reverse("mo_close:records"), {"tab": "PL1"})
+        self.assertEqual([g["mo"].reference for g in resp.context["groups"]], ["PL1/MO/34770-002"])
+
+        mo = pl.mos.get(reference="PL3/MO/06873")
+        self.act(mo, "mark")
+        resp = self.client.get(reverse("mo_close:records"), {"tab": "PL3", "f": "waiting"})
+        self.assertEqual([g["mo"].reference for g in resp.context["groups"]], ["PL3/MO/06873"])
+        resp = self.client.get(reverse("mo_close:records"), {"tab": "PL3", "q": "PC/17852"})
+        self.assertEqual([g["mo"].reference for g in resp.context["groups"]], ["PL3/MO/06873"])
+        resp = self.client.get(reverse("mo_close:records"), {"tab": "PL3", "show": "closed"})
+        self.assertEqual(resp.context["groups"], [])
+
+    def test_row_progress(self):
+        pl = self.save_and_generate()
+        tr = TransferRecord.objects.get(reference="PL3/PC/17852")
+        self.assertEqual(tr.row_progress["done"], 0)
+        self.odoo.set_state("stock.picking", 202, "done")
+        self.act(tr, "mark")
+        tr.refresh_from_db()
+        self.assertEqual((tr.row_progress["done"], tr.row_progress["percent"]), (2, 67))
+        self.client.force_login(self.checker)
+        self.act(tr, "confirm")
+        tr.refresh_from_db()
+        self.assertEqual((tr.row_progress["done"], tr.row_progress["label"]), (3, "Confirmed"))
+        self.assertTrue(pl.pk)
+
     def test_session_expired_redirects_to_login(self):
         pl = self.save_and_generate()
         self.odoo.expired = True

@@ -1,0 +1,23 @@
+{# SF-Innova / SF-Electrical column of an MO row. Users check it (Yes / No popup); only Admin unchecks, with a reason. #}
+<td class="sf-cell">
+  <div class="form-check m-0">
+    <input class="form-check-input sf-check" type="checkbox" id="sf-{{ sf.team }}-{{ mo.pk }}"
+      {% if sf.done %}checked{% endif %}
+      {% if sf.done and "mo_close.sf_undo" not in modules or not sf.done and sf.module not in modules %}disabled{% endif %}
+      {% if sf.done %}data-sf-url="{% url 'mo_close:sf_action' mo.pk sf.team 'uncheck' %}" data-sf-undo="1"
+        data-sf-message="Uncheck {{ sf.label }} done on {{ mo.reference }}?"
+      {% else %}data-sf-url="{% url 'mo_close:sf_action' mo.pk sf.team 'check' %}"
+        data-sf-message="Mark {{ sf.label }} done on {{ mo.reference }}? Once checked, only an Admin can uncheck it."{% endif %}
+      data-sf-title="{{ sf.label }}" data-sf-target="#mo-group-{{ mo.pk }}"
+      {% if sf.done and "mo_close.sf_undo" not in modules %}title="Only an Admin can uncheck this"{% endif %}>
+    <label class="form-check-label small" for="sf-{{ sf.team }}-{{ mo.pk }}">Done</label>
+  </div>
+  {% if sf.done %}<div class="small-note">{{ sf.at|date:"d-M-Y H:i" }}<br>{{ sf.by.display_name }}</div>{% endif %}
+  {% if sf.undo_comment %}
+    <div class="sf-undo" title="Unchecked by Admin">
+      <i class="bi bi-arrow-counterclockwise"></i> Unchecked {{ sf.undo_at|date:"d-M-Y H:i" }} · {{ sf.undo_by.display_name|default:"—" }}
+      <div class="fst-italic">“{{ sf.undo_comment }}”</div>
+    </div>
+  {% endif %}
+  {% if error and error_kind == "sf" and error_pk == sf.team %}<div class="text-danger small mt-1">{{ error }}</div>{% endif %}
+</td>

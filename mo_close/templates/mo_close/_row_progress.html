@@ -1,0 +1,10 @@
+{# Progress of one MO / transfer row: marked done → done in Odoo → final confirmation. #}
+<div class="row-progress" title="{{ p.title }}">
+  <div class="d-flex align-items-center gap-2">
+    <div class="progress flex-grow-1" role="progressbar" aria-valuenow="{{ p.percent }}" aria-valuemin="0" aria-valuemax="100">
+      <div class="progress-bar {% if p.percent == 100 %}bg-done{% endif %}" style="width: {{ p.percent }}%"></div>
+    </div>
+    <span class="small fw-semibold">{{ p.done }}/{{ p.total }}</span>
+  </div>
+  <div class="small-note">{{ p.label }}</div>
+</div>

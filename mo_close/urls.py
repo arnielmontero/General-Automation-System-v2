@@ -17,6 +17,7 @@ urlpatterns = [
     path("records/<int:pk>/progress/", views.record_progress_badge, name="record_progress"),
     path("records/<int:pk>/export/<str:fmt>/", views.record_export, name="record_export"),
     path("rows/<str:kind>/<int:pk>/<str:action>/", views.row_action, name="row_action"),
+    path("mos/<int:pk>/sf/<str:team>/<str:action>/", views.sf_action, name="sf_action"),
     path("progress/", views.progress, name="progress"),
     path("progress/export/<str:fmt>/", views.progress_export, name="progress_export"),
     path("reports/", views.reports_view, name="reports"),

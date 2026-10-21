@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load mo_close_tags %}
+{% load mo_close_tags static %}
 {% block title %}{{ pl.so_number }}{% endblock %}
 {% block page_kicker %}Record · {{ pl.sold_to_name|default:"MO's To Be Close" }}{% endblock %}
 {% block page_title %}{{ pl.so_number }}{% endblock %}
@@ -68,14 +68,14 @@
           The system auto-corrected {{ source_fixes|length|pluralize:"it,them" }} to <span class="mono fw-semibold">{{ pl.so_number }}</span> — please correct the Source in Odoo.</div>{% endif %}
         <div class="table-responsive">
           <table class="table table-soft table-compact">
-            <thead><tr><th>SO#</th><th>FG Code</th><th>FG</th><th class="text-end">Qty</th><th>MO / Transfer</th><th>State</th><th>Marked done</th><th>System check</th><th>Final confirmation</th></tr></thead>
+            <thead><tr><th>SO#</th><th>FG Code</th><th>FG</th><th class="text-end">Qty</th><th>MO / Transfer</th><th>State</th><th>Progress</th><th>SF-Innova</th><th>SF-Electrical</th><th>Marked done</th><th>System check</th><th>Final confirmation</th></tr></thead>
             {% for group in groups %}
               {% ifchanged group.mo.on_packing_list %}{% if not group.mo.on_packing_list %}
-                <tbody><tr><td colspan="9" class="fw-semibold pt-3">Components / sub-assemblies <span class="small-note fw-normal">— MOs made for {{ pl.so_number }} whose product is not on the packing list</span></td></tr></tbody>
+                <tbody><tr><td colspan="12" class="fw-semibold pt-3">Components / sub-assemblies <span class="small-note fw-normal">— MOs made for {{ pl.so_number }} whose product is not on the packing list</span></td></tr></tbody>
               {% endif %}{% endifchanged %}
               {% include "mo_close/_mo_group.html" %}
             {% empty %}
-              <tbody><tr><td colspan="9" class="text-center muted py-4">
+              <tbody><tr><td colspan="12" class="text-center muted py-4">
                 {% if f == "all" %}No MO's in Confirmed / In Progress / To Close with {{ pl.so_number }} in their Source were found in Odoo — they may all be Done already.{% else %}No rows for this filter.{% endif %}
               </td></tr></tbody>
             {% endfor %}
@@ -129,4 +129,6 @@
     </div>
   </div>
 </div>
+{% include "mo_close/_sf_modal.html" %}
 {% endblock %}
+{% block scripts %}<script src="{% static 'js/sf-done.js' %}"></script>{% endblock %}

@@ -270,6 +270,29 @@ class TrackedRow(models.Model):
             return "waiting"
         return "open"
 
+    @property
+    def row_progress(self):
+        """Progress of this one row over the Step 3 steps: marked done → done in Odoo → final confirmation."""
+        steps = [
+            ("Marked done", self.user_done),
+            ("Done in Odoo", self.system_status == self.SystemStatus.CONFIRMED or self.final_confirmed),
+            ("Final confirmation", self.final_confirmed),
+        ]
+        done = sum(1 for _, ok in steps if ok)
+        if self.final_confirmed:
+            label = "Confirmed"
+        elif self.user_done:
+            label = "Waiting checker"
+        else:
+            label = "Not marked done"
+        return {
+            "done": done,
+            "total": len(steps),
+            "percent": round(100 * done / len(steps)),
+            "label": label,
+            "title": " · ".join(f"{'✓' if ok else '○'} {name}" for name, ok in steps),
+        }
+
 
 class MORecord(TrackedRow):
     """A Manufacturing Order of the SO (Step 2): matched to a packing line, or — when its product is not on
@@ -284,8 +307,36 @@ class MORecord(TrackedRow):
     product_label = models.CharField(max_length=500, blank=True)
     origin = models.CharField("Source", max_length=500, blank=True)
 
+    # Semi-finished work done by SF-Innova / SF-Electrical (checked by Users, unchecked only by Admin with a reason)
+    sf_innova_done = models.BooleanField("SF-Innova done", default=False)
+    sf_innova_at = models.DateTimeField(null=True, blank=True)
+    sf_innova_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    sf_innova_undo_comment = models.TextField(blank=True)
+    sf_innova_undo_at = models.DateTimeField(null=True, blank=True)
+    sf_innova_undo_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    sf_electrical_done = models.BooleanField("SF-Electrical done", default=False)
+    sf_electrical_at = models.DateTimeField(null=True, blank=True)
+    sf_electrical_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    sf_electrical_undo_comment = models.TextField(blank=True)
+    sf_electrical_undo_at = models.DateTimeField(null=True, blank=True)
+    sf_electrical_undo_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
     STATE_LABELS = MO_STATES
     KIND = "mo"
+    # team code → (label, module that may check it)
+    SF_TEAMS = {
+        "innova": ("SF-Innova", "mo_close.sf_innova"),
+        "electrical": ("SF-Electrical", "mo_close.sf_electrical"),
+    }
+    SF_RELATED = [f"sf_{team}_{suffix}" for team in SF_TEAMS for suffix in ("by", "undo_by")]
 
     class Meta:
         ordering = ["-on_packing_list", "fg_code", "reference"]
@@ -293,6 +344,30 @@ class MORecord(TrackedRow):
 
     def __str__(self):
         return self.reference
+
+    @property
+    def plant(self):
+        """'PL1/MO/36235' → 'PL1'."""
+        return self.reference.split("/", 1)[0]
+
+    def sf_mark(self, team):
+        """One SF column of this MO as a dict (done, at, by, undo_comment, undo_at, undo_by)."""
+        get = lambda name: getattr(self, f"sf_{team}_{name}")  # noqa: E731
+        return {
+            "team": team,
+            "label": self.SF_TEAMS[team][0],
+            "module": self.SF_TEAMS[team][1],
+            "done": get("done"),
+            "at": get("at"),
+            "by": get("by"),
+            "undo_comment": get("undo_comment"),
+            "undo_at": get("undo_at"),
+            "undo_by": get("undo_by"),
+        }
+
+    @property
+    def sf_marks(self):
+        return [self.sf_mark(team) for team in self.SF_TEAMS]
 
     @property
     def source_fix(self):
