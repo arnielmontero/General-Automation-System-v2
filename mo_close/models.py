@@ -30,6 +30,12 @@ def so_base_digits(so):
     return so_digits(so).split("-", 1)[0]
 
 
+def so_root(so):
+    """'S04743-1-2' → 'S04743': the parent S0 a child SO is named after — the Sales Order as it is in Odoo."""
+    m = _SO_PARTS.match(so)
+    return f"S{m.group(1)}" if m else so
+
+
 def so_parent_number(so):
     """'S08027-1-2' → 'S08027-1', 'S08027-1' → 'S08027', 'S08027' → '' (no parent in the name)."""
     return so.rsplit("-", 1)[0] if _SO_PARTS.match(so) and "-" in so else ""

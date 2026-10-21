@@ -392,9 +392,10 @@ class WorkflowTests(TestCase):
         return self.client.post(reverse("mo_close:record_preview", args=[pl.pk]), {"action": "save"})
 
     def test_so_numbers_with_children(self):
-        from mo_close.models import so_in_source, so_parent_number
+        from mo_close.models import so_in_source, so_parent_number, so_root
         from mo_close.services import normalize_so
 
+        self.assertEqual([so_root(v) for v in ("S04743", "S04743-1", "S04743-1-2")], ["S04743"] * 3)
         self.assertEqual([normalize_so(v) for v in ("4743-1", "s04743-1-2", "SO4743", " 4743 ")],
                          ["S04743-1", "S04743-1-2", "S04743", "S04743"])
         self.assertEqual((so_parent_number("S04743-1-2"), so_parent_number("S04743-1"), so_parent_number("S04743")),
@@ -444,6 +445,9 @@ class WorkflowTests(TestCase):
         child = pl.sales_orders.get(so_number="S04743-1")
         self.assertEqual(child.parent.so_number, "S04743")
         self.assertEqual(child.documents.filter(saved=False).count(), 2)
+        # The parent S0 is the key: S04743-1 is S04743 in Odoo, and its PDF says Invoice No. S04743 — no warnings.
+        for doc in child.documents.all():
+            self.assertFalse([w for w in doc.parse_warnings if "Odoo" in w or "Invoice No." in w], doc.parse_warnings)
         resp = self.client.get(reverse("mo_close:record_detail", args=[pl.pk]))
         self.assertContains(resp, "2 uploaded packing lists waiting for review")
         self.save_preview(pl)

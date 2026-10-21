@@ -28,6 +28,7 @@ from .models import (
     so_in_source,
     so_is_customer_code,
     so_parent_number,
+    so_root,
 )
 from .pdf_parser import parse_date
 
@@ -67,9 +68,10 @@ def validate_so(so):
 
 
 def so_exists_in_odoo(client, so):
-    """True / False, or None when this user cannot read Sales Orders in Odoo."""
+    """True / False, or None when this user cannot read Sales Orders in Odoo. A child SO (S04743-1) is checked
+    by its parent S0 (S04743) — the suffix only exists in this system, not in Odoo."""
     try:
-        return client.search_count("sale.order", [("name", "=", so)]) > 0
+        return client.search_count("sale.order", [("name", "=", so_root(so))]) > 0
     except OdooAccessError:
         return None
 
@@ -148,11 +150,13 @@ def add_document(request, node, uploaded_file, parsed, odoo_check):
     so = node.so_number
     header = parsed.header
     warnings = list(parsed.warnings)
+    # The parent S0 is the key: a packing list of S04743-1 carries Invoice No. S04743, which is right.
+    root = so_root(so)
     invoice = (header.get("invoice_no") or "").strip().upper()
-    if invoice and normalize_so(invoice) != so:
-        warnings.insert(0, f"The PDF Invoice No. is {invoice}, but this packing list is for {so}.")
+    if invoice and so_root(normalize_so(invoice)) != root:
+        warnings.insert(0, f"The PDF Invoice No. is {invoice}, but this packing list is for {root}.")
     if odoo_check is False:
-        warnings.insert(0, f"Sales Order {so} was not found in Odoo.")
+        warnings.insert(0, f"Sales Order {root} was not found in Odoo.")
     elif odoo_check is None:
         warnings.append("Could not verify the Sales Order in Odoo (no access to Sales Orders).")
 
