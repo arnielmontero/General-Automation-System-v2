@@ -1,32 +1,36 @@
 {% load mo_close_tags %}
+{# List data of one packing list PDF: grouped by External Code, and every row as printed. #}
 <div class="table-responsive">
   <table class="table table-soft">
-    <thead><tr><th>Invoice No</th><th>External Code</th><th>Description</th><th class="text-end">Qty</th><th class="text-end">PDF rows</th></tr></thead>
+    <thead><tr><th>SO</th><th>Invoice No</th><th>External Code</th><th>Description</th><th class="text-end">Qty</th><th class="text-end">PDF rows</th></tr></thead>
     <tbody>
-    {% for g in groups %}
+    {% for g in doc.groups %}
       <tr>
-        <td>{{ pl.so_number }}</td>
+        <td class="mono">{{ doc.sales_order.so_number }}</td>
+        <td>{{ doc.invoice_no|default:"—" }}</td>
         <td class="mono fw-semibold">{{ g.code|default:"—" }}</td>
         <td>{{ g.description }}</td>
         <td class="text-end fw-semibold">{{ g.qty|qty }}</td>
         <td class="text-end muted">{{ g.rows }}</td>
       </tr>
+    {% empty %}
+      <tr><td colspan="6" class="text-center muted py-3">No rows were read from this PDF.</td></tr>
     {% endfor %}
     </tbody>
   </table>
 </div>
 <details class="px-3 pb-3">
-  <summary class="small fw-semibold py-2">All rows as printed in the PDF ({{ raw_lines|length }})</summary>
+  <summary class="small fw-semibold py-2">All rows as printed in the PDF ({{ doc.lines.all|length }})</summary>
   <div class="table-responsive">
     <table class="table table-soft table-sm">
       <thead><tr><th>#</th><th>External Code</th><th>Description</th><th>UM</th><th class="text-end">Packages</th><th class="text-end">Net Weight</th><th class="text-end">Gross Weight</th><th class="text-end">CBM</th><th class="text-end">Qty</th></tr></thead>
       <tbody>
-      {% for l in raw_lines %}
+      {% for l in doc.lines.all %}
         <tr><td class="muted">{{ l.line_no }}</td><td class="mono">{{ l.external_code }}</td><td>{{ l.description }}</td><td>{{ l.um }}</td>
           <td class="text-end">{{ l.packages|qty }}</td><td class="text-end">{{ l.net_weight|qty }}</td><td class="text-end">{{ l.gross_weight|qty }}</td><td class="text-end">{{ l.cbm|qty }}</td><td class="text-end">{{ l.qty|qty }}</td></tr>
       {% endfor %}
       <tr class="fw-semibold"><td colspan="4" class="text-end">Grand Total (PDF)</td>
-        <td class="text-end">{{ pl.total_packages|qty }}</td><td class="text-end">{{ pl.total_net_weight|qty }}</td><td class="text-end">{{ pl.total_gross_weight|qty }}</td><td class="text-end">{{ pl.total_cbm|qty }}</td><td class="text-end">{{ pl.total_qty|qty }}</td></tr>
+        <td class="text-end">{{ doc.total_packages|qty }}</td><td class="text-end">{{ doc.total_net_weight|qty }}</td><td class="text-end">{{ doc.total_gross_weight|qty }}</td><td class="text-end">{{ doc.total_cbm|qty }}</td><td class="text-end">{{ doc.total_qty|qty }}</td></tr>
       </tbody>
     </table>
   </div>

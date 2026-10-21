@@ -1,35 +1,8 @@
-{% load mo_close_tags %}
+{# Information tab: the SO tree, then every saved packing list by SO. #}
 <div class="card-soft mb-3">
-  <div class="card-head">
-    <h2>Information</h2>
-    {% if pl.pdf %}<a class="btn btn-soft btn-xs" href="{% url 'mo_close:record_pdf' pl.pk %}" target="_blank"><i class="bi bi-file-earmark-pdf"></i> {{ pl.pdf_name|truncatechars:50 }}</a>{% endif %}
-  </div>
-  <div class="card-body-soft">
-    <div class="row g-3 small">
-      <div class="col-md-6">
-        <dl class="row mb-0">
-          <dt class="col-4 muted fw-semibold">Sold To</dt><dd class="col-8">{{ pl.sold_to|linebreaksbr|default:"—" }}</dd>
-          <dt class="col-4 muted fw-semibold">Tel. No.</dt><dd class="col-8">{{ pl.tel|default:"—" }}</dd>
-          <dt class="col-4 muted fw-semibold">Fax No.</dt><dd class="col-8">{{ pl.fax|default:"—" }}</dd>
-          <dt class="col-4 muted fw-semibold">ATTN</dt><dd class="col-8 mb-0">{{ pl.attn|default:"—" }}</dd>
-        </dl>
-      </div>
-      <div class="col-md-6">
-        <dl class="row mb-0">
-          <dt class="col-4 muted fw-semibold">Date</dt><dd class="col-8">{{ pl.doc_date_text|default:"—" }}</dd>
-          <dt class="col-4 muted fw-semibold">Invoice No.</dt><dd class="col-8">{{ pl.invoice_no|default:"—" }}</dd>
-          <dt class="col-4 muted fw-semibold">Container No.</dt><dd class="col-8">{{ pl.container_no|default:"—" }}</dd>
-          <dt class="col-4 muted fw-semibold">Seal No.</dt><dd class="col-8">{{ pl.seal_no|default:"—" }}</dd>
-          <dt class="col-4 muted fw-semibold">Destination</dt><dd class="col-8 mb-0">{{ pl.destination|default:"—" }}</dd>
-        </dl>
-      </div>
-    </div>
-    <div class="d-flex flex-wrap gap-3 mt-3 pt-3 border-top small">
-      <span><span class="muted">Total Qty</span> <b>{{ pl.total_qty|qty|default:"—" }}</b></span>
-      <span><span class="muted">Packages</span> <b>{{ pl.total_packages|qty|default:"—" }}</b></span>
-      <span><span class="muted">Net weight</span> <b>{{ pl.total_net_weight|qty|default:"—" }}</b></span>
-      <span><span class="muted">Gross weight</span> <b>{{ pl.total_gross_weight|qty|default:"—" }}</b></span>
-      <span><span class="muted">CBM</span> <b>{{ pl.total_cbm|qty|default:"—" }}</b></span>
-    </div>
-  </div>
+  <div class="card-head"><h2>Sales orders</h2><span class="small-note">Parent {{ pl.so_number }} and its child SOs</span></div>
+  <div class="card-body-soft">{% include "mo_close/_so_tree.html" with show_docs=True %}</div>
 </div>
+{% for n in tree %}
+  {% for doc in n.docs %}{% include "mo_close/_document_info.html" with can_remove=True %}{% endfor %}
+{% endfor %}

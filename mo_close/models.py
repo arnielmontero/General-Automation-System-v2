@@ -16,9 +16,28 @@ def norm_code(code):
     return re.sub(r"[^A-Z0-9]", "", (code or "").upper())
 
 
+_SO_PARTS = re.compile(r"^S(\d+)((?:-\d+)*)$")
+
+
 def so_digits(so):
-    """'S08027' → '8027' (the number without the S and leading zeros)."""
-    return str(int(so[1:])) if so[1:].isdigit() else so
+    """'S08027' → '8027', child SO 'S08027-1' → '8027-1' (without the S and leading zeros)."""
+    m = _SO_PARTS.match(so)
+    return f"{int(m.group(1))}{m.group(2)}" if m else so
+
+
+def so_base_digits(so):
+    """'S08027-1-2' → '8027' (the number of the S0 the child is named after)."""
+    return so_digits(so).split("-", 1)[0]
+
+
+def so_parent_number(so):
+    """'S08027-1-2' → 'S08027-1', 'S08027-1' → 'S08027', 'S08027' → '' (no parent in the name)."""
+    return so.rsplit("-", 1)[0] if _SO_PARTS.match(so) and "-" in so else ""
+
+
+def so_sort_key(so):
+    """Natural order: S08027, S08027-1, S08027-2, S08027-10."""
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", so)]
 
 
 def so_source_pattern(so):
@@ -27,8 +46,10 @@ def so_source_pattern(so):
     never S080271, PO8027, a number that is part of a date / time (10/16/2026, 2026-08-07), or a bare number in
     parentheses, which in SAWO Sources is the customer code (UKRAINE(4300), Sauna Europe (11500))."""
     sep = r"[\s#.:-]*"
-    number = re.escape(so_digits(so))
-    prefixed = r"(?<![A-Za-z0-9])(?:S{1,2}" + sep + r"[O0]?|[O0])" + sep + r"0*" + number + r"(?!\d)"
+    base, *suffix = so_digits(so).split("-")
+    # A child SO keeps its suffix ('S08027-1', 'S08027 - 1'); 'S08027-1' is never the parent S08027.
+    number = re.escape(base) + "".join(r"\s?-\s?" + re.escape(n) for n in suffix)
+    prefixed = r"(?<![A-Za-z0-9])(?:S{1,2}" + sep + r"[O0]?|[O0])" + sep + r"0*" + number + r"(?!\d)(?!-\d)"
     bare = r"(?<![A-Za-z0-9/.:(-])0*" + number + r"(?![\d/)]|[.:-]\d)"
     return re.compile(f"(?P<prefixed>{prefixed})|(?P<bare>{bare})", re.IGNORECASE)
 
@@ -44,7 +65,7 @@ _DATE_BEFORE = re.compile(_MONTH + r"[\s.,]*(?:\d{1,2}[\s.,]*)?$|\d\s*,\s*$", re
 
 
 def _other_so_in(so, source):
-    number = int(so_digits(so)) if so_digits(so).isdigit() else None
+    number = int(so_base_digits(so)) if so_base_digits(so).isdigit() else None
     return any(int(m.group(1)) != number for m in _PREFIXED_SO.finditer(source))
 
 
@@ -95,19 +116,33 @@ def so_source_fix(so, source):
     return found[0]
 
 
-class PackingList(models.Model):
-    """One record per Sales Order, created from an uploaded packing list PDF (Step 1)."""
+def group_lines(lines):
+    """Packing lines grouped by External Code with Qty summed (as shown on the record)."""
+    groups = OrderedDict()
+    for line in lines:
+        key = norm_code(line.external_code) or f"__line{line.pk}"
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {
+                "code": line.external_code,
+                "norm": norm_code(line.external_code),
+                "description": line.description,
+                "um": line.um,
+                "qty": Decimal("0"),
+                "rows": 0,
+            }
+        g["qty"] += line.qty or 0
+        g["rows"] += 1
+    return list(groups.values())
 
-    class Status(models.TextChoices):
-        DRAFT = "draft", "Draft"
-        SAVED = "saved", "Saved"
-        GENERATED = "generated", "In progress"
-        CLOSED = "closed", "Closed"
 
-    so_number = models.CharField("SO", max_length=20, unique=True)
-    status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT, db_index=True)
+HEADER_FIELDS = ["sold_to", "tel", "fax", "attn", "doc_date_text", "doc_date", "invoice_no", "container_no", "seal_no", "destination"]
+TOTAL_FIELDS = ["total_packages", "total_net_weight", "total_gross_weight", "total_cbm", "total_qty"]
 
-    # Header information from the PDF
+
+class PackingHeader(models.Model):
+    """Header information and Grand Total of a packing list PDF."""
+
     sold_to = models.TextField(blank=True)
     tel = models.CharField("Tel. No.", max_length=100, blank=True)
     fax = models.CharField("Fax No.", max_length=100, blank=True)
@@ -126,9 +161,27 @@ class PackingList(models.Model):
     total_cbm = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     total_qty = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
 
-    pdf = models.FileField(upload_to="packing_lists/%Y/%m/")
-    pdf_name = models.CharField(max_length=255, blank=True)
-    parse_warnings = models.JSONField(default=list, blank=True)
+    class Meta:
+        abstract = True
+
+    @property
+    def sold_to_name(self):
+        return self.sold_to.splitlines()[0] if self.sold_to else ""
+
+
+class PackingList(PackingHeader):
+    """One record per parent Sales Order (S0). It holds the SO's tree of child SOs (other Odoo SOs grouped
+    under it, any depth) and their packing list PDFs; MOs are generated and tracked once for the whole tree.
+    The header fields show the parent's first packing list (containers and totals: all of them)."""
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        SAVED = "saved", "Saved"
+        GENERATED = "generated", "In progress"
+        CLOSED = "closed", "Closed"
+
+    so_number = models.CharField("SO", max_length=20, unique=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT, db_index=True)
 
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -150,28 +203,56 @@ class PackingList(models.Model):
     def audit_label(self):
         return self.so_number
 
-    @property
-    def sold_to_name(self):
-        return self.sold_to.splitlines()[0] if self.sold_to else ""
-
     def grouped_lines(self):
-        """Packing lines grouped by External Code with Qty summed (as shown on the record)."""
-        groups = OrderedDict()
-        for line in self.lines.all():
-            key = norm_code(line.external_code) or f"__line{line.pk}"
-            g = groups.get(key)
-            if g is None:
-                g = groups[key] = {
-                    "code": line.external_code,
-                    "norm": norm_code(line.external_code),
-                    "description": line.description,
-                    "um": line.um,
-                    "qty": Decimal("0"),
-                    "rows": 0,
-                }
-            g["qty"] += line.qty or 0
-            g["rows"] += 1
-        return list(groups.values())
+        """Lines of every saved packing list of the record (all SOs), grouped by External Code."""
+        return group_lines(self.lines.filter(document__saved=True))
+
+    def so_tree(self):
+        """[SalesOrder, …] parent first, each child right under its parent (depth-first), with .depth set."""
+        nodes = list(self.sales_orders.all())
+        by_pk = {node.pk: node for node in nodes}
+        children = {}
+        for node in nodes:
+            if node.parent_id in by_pk:
+                node.parent = by_pk[node.parent_id]  # no query per node for .parent / .path
+            children.setdefault(node.parent_id, []).append(node)
+        out = []
+
+        def walk(parent_id, depth):
+            for node in sorted(children.get(parent_id, []), key=lambda n: so_sort_key(n.so_number)):
+                node.depth = depth
+                out.append(node)
+                walk(node.pk, depth + 1)
+
+        walk(None, 0)
+        return out
+
+    @property
+    def child_sos(self):
+        return self.so_tree()[1:]
+
+    def ensure_root_so(self):
+        """The record's own (parent) SO node, created when missing."""
+        root, _ = SalesOrder.objects.get_or_create(
+            record=self, parent=None, defaults={"so_number": self.so_number, "created_by_id": self.created_by_id}
+        )
+        return root
+
+    def sync_header(self, save=True):
+        """Header from the parent's first packing list; container numbers and totals from all of them."""
+        docs = [d for d in self.documents.select_related("sales_order") if d.saved] or list(self.documents.all())
+        if not docs:
+            return
+        docs.sort(key=lambda d: (d.sales_order.parent_id is not None, d.created_at, d.pk))
+        for name in HEADER_FIELDS:
+            setattr(self, name, getattr(docs[0], name))
+        containers = list(OrderedDict.fromkeys(d.container_no for d in docs if d.container_no))
+        self.container_no = ", ".join(containers)[:200]
+        for name in TOTAL_FIELDS:
+            values = [getattr(d, name) for d in docs if getattr(d, name) is not None]
+            setattr(self, name, sum(values) if values else None)
+        if save:
+            self.save(update_fields=HEADER_FIELDS + TOTAL_FIELDS)
 
     def all_rows(self):
         """Every tracked row (MOs and their transfers)."""
@@ -195,10 +276,74 @@ class PackingList(models.Model):
             self.save(update_fields=["status", "closed_at"])
 
 
+class SalesOrder(models.Model):
+    """One SO of a record: the record's own parent S0 (no parent) or a child SO under it, any depth.
+    A child is another Odoo SO grouped under the parent — S04743-1, S04743-1-1, or any number (S08869)."""
+
+    record = models.ForeignKey(PackingList, on_delete=models.CASCADE, related_name="sales_orders")
+    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE, related_name="children")
+    so_number = models.CharField("SO", max_length=30, unique=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return self.so_number
+
+    @property
+    def is_root(self):
+        return self.parent_id is None
+
+    def ancestors(self):
+        """[parent, grandparent, …]."""
+        out, node = [], self.parent
+        while node is not None:
+            out.append(node)
+            node = node.parent
+        return out
+
+    @property
+    def path(self):
+        """'S04743 › S04743-1 › S04743-1-1'."""
+        return " › ".join(n.so_number for n in [*reversed(self.ancestors()), self])
+
+    def grouped_lines(self):
+        """Lines of this SO's saved packing lists, grouped by External Code."""
+        return group_lines(PackingLine.objects.filter(document__sales_order=self, document__saved=True))
+
+
+class PackingDocument(PackingHeader):
+    """One uploaded packing list PDF, for one SO of the record. Waits for review (saved=False) after upload."""
+
+    record = models.ForeignKey(PackingList, on_delete=models.CASCADE, related_name="documents")
+    sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name="documents")
+    saved = models.BooleanField(default=False)
+
+    pdf = models.FileField(upload_to="packing_lists/%Y/%m/")
+    pdf_name = models.CharField(max_length=255, blank=True)
+    parse_warnings = models.JSONField(default=list, blank=True)
+
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    saved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self):
+        return self.pdf_name or f"Packing list {self.pk}"
+
+    def grouped_lines(self):
+        return group_lines(self.lines.all())
+
+
 class PackingLine(models.Model):
     """One row of the packing list table, saved as printed."""
 
     packing_list = models.ForeignKey(PackingList, on_delete=models.CASCADE, related_name="lines")
+    document = models.ForeignKey(PackingDocument, null=True, blank=True, on_delete=models.CASCADE, related_name="lines")
     line_no = models.PositiveIntegerField()
     external_code = models.CharField(max_length=100, blank=True)
     description = models.CharField(max_length=500, blank=True)
@@ -299,6 +444,8 @@ class MORecord(TrackedRow):
     the packing list — a component / sub-assembly made for the SO (fg_* then hold the MO's product)."""
 
     packing_list = models.ForeignKey(PackingList, on_delete=models.CASCADE, related_name="mos")
+    # The SO of the record's tree that the MO Source names (the most specific one: S04743-1 over S04743).
+    sales_order = models.ForeignKey(SalesOrder, null=True, blank=True, on_delete=models.SET_NULL, related_name="mos")
     on_packing_list = models.BooleanField(default=True)
     fg_code = models.CharField("FG Code", max_length=100)
     fg_description = models.CharField("FG", max_length=500, blank=True)
@@ -370,9 +517,14 @@ class MORecord(TrackedRow):
         return [self.sf_mark(team) for team in self.SF_TEAMS]
 
     @property
+    def so_number(self):
+        """The MO's own SO: a child SO of the record, or the record's parent SO."""
+        return self.sales_order.so_number if self.sales_order_id else self.packing_list.so_number
+
+    @property
     def source_fix(self):
         """Fix flag: the SO is written wrong in the Odoo Source (e.g. 'SO8027' instead of 'S08027')."""
-        return so_source_fix(self.packing_list.so_number, self.origin)
+        return so_source_fix(self.so_number, self.origin)
 
 
 class TransferRecord(TrackedRow):

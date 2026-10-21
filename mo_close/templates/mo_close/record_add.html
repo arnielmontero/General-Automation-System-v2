@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Upload packing lists · {{ record.so_number }}{% endblock %}
+{% block page_kicker %}Step 1 · MO's To Be Close{% endblock %}
+{% block page_title %}Upload packing lists · {{ record.so_number }}{% endblock %}
+{% block header_actions %}
+  <a class="btn btn-soft btn-sm" href="{% url 'mo_close:records' %}"><i class="bi bi-arrow-left"></i> Records</a>
+  <a class="btn btn-soft btn-sm" href="{% url 'mo_close:record_detail' record.pk %}"><i class="bi bi-journal-text"></i> Open record</a>
+{% endblock %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card-soft">
+      <div class="card-head"><h2>SO &amp; packing list PDFs</h2></div>
+      <form class="card-body-soft" method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
+        {% if form.non_field_errors %}<div class="alert alert-danger py-2">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+        <div class="mb-3">
+          <label class="form-label fw-semibold small" for="{{ form.so_number.id_for_label }}">{{ form.so_number.label }}</label>
+          {{ form.so_number }}
+          <datalist id="record-sos">{% for n in tree %}<option value="{{ n.so_number }}">{% endfor %}</datalist>
+          {% for e in form.so_number.errors %}<div class="text-danger small mt-1">{{ e }}</div>{% endfor %}
+          <div class="small-note mt-1">{{ record.so_number }} or one of its child SOs adds more packing lists to it. A new number creates a child SO: <b>{{ record.so_number }}-1</b> (4743-1 also works), or another SO number grouped under a parent below.</div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold small" for="{{ form.parent_so.id_for_label }}">{{ form.parent_so.label }}</label>
+          {{ form.parent_so }}
+          {% for e in form.parent_so.errors %}<div class="text-danger small mt-1">{{ e }}</div>{% endfor %}
+          <div class="small-note mt-1">Only for a new child SO. Leave empty to use the parent in its number (S04743-1-1 → S04743-1), otherwise it goes under {{ record.so_number }}.</div>
+        </div>
+        <div class="mb-4">
+          <label class="form-label fw-semibold small" for="{{ form.pdfs.id_for_label }}">{{ form.pdfs.label }}</label>
+          {{ form.pdfs }}
+          {% for e in form.pdfs.errors %}<div class="text-danger small mt-1">{{ e }}</div>{% endfor %}
+          <div class="small-note mt-1">One or more packing list PDFs printed from Odoo for this SO (max 10 MB each, 20 at a time).</div>
+        </div>
+        <button class="btn btn-primary"><i class="bi bi-upload"></i> Upload &amp; read PDFs</button>
+      </form>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card-soft mb-3">
+      <div class="card-head"><h2>Sales orders of {{ record.so_number }}</h2></div>
+      <div class="card-body-soft">{% include "mo_close/_so_tree.html" %}</div>
+    </div>
+    <div class="card-soft">
+      <div class="card-head"><h2>What happens next</h2></div>
+      <div class="card-body-soft small">
+        <ol class="mb-0 ps-3">
+          <li class="mb-2">The system reads each PDF and separates the <b>information</b> from the <b>list data</b>.</li>
+          <li class="mb-2">You review them, then <b>Save</b> or <b>Cancel</b>.</li>
+          <li><b>Generate from Odoo</b> on the record collects the MO's of {{ record.so_number }} and every child SO.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

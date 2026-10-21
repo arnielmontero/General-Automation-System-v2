@@ -1,0 +1,4 @@
+{# Child SOs of a record under its SO number in lists (plain text; only the parent SO links to the upload page). #}
+{% with children=pl.child_sos %}{% if children %}
+<div class="so-children">{% for n in children %}<span class="so-child" style="--depth: {{ n.depth }}" title="{{ n.path }}">↳ {{ n.so_number }}</span>{% endfor %}</div>
+{% endif %}{% endwith %}

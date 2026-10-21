@@ -5,16 +5,28 @@ import copy
 from core.odoo import OdooSessionExpired
 
 
+def _term(record, field, op, value):
+    actual = record.get(field)
+    if op == "=":
+        return actual == value
+    if op == "in":
+        return actual in value
+    if op == "ilike":
+        return str(value).lower() in str(actual or "").lower()
+    raise NotImplementedError(op)
+
+
 def _match(record, domain):
-    for field, op, value in domain:
-        actual = record.get(field)
-        if op == "=" and actual != value:
-            return False
-        if op == "in" and actual not in value:
-            return False
-        if op == "ilike" and str(value).lower() not in str(actual or "").lower():
-            return False
-    return True
+    """Odoo domain in prefix notation: terms are ANDed unless joined by '|' / '&'."""
+    stack = []
+    for item in reversed(domain):
+        if item == "|":
+            stack.append(stack.pop() | stack.pop())
+        elif item == "&":
+            stack.append(stack.pop() & stack.pop())
+        else:
+            stack.append(_term(record, *item))
+    return all(stack)
 
 
 class FakeOdoo:
@@ -52,6 +64,13 @@ class FakeOdoo:
                 {"id": 7, "name": "PL1/MO/34999", "product_id": [104, "[2INN-IH23-001] Other number"],
                  "product_qty": 1.0, "state": "confirmed", "picking_ids": [],
                  "origin": "PO4743 / S47430"},
+                # Child SO S04743-1 (another Odoo SO under S04743) and a separate SO S08869 grouped under it.
+                {"id": 8, "name": "PL1/MO/40001", "product_id": [101, "[NRNS-60NS-BL-Z-C] Child SO"],
+                 "product_qty": 4.0, "state": "confirmed", "picking_ids": [],
+                 "origin": "Heater for S04743-1 - HOLLAND SAWO 3"},
+                {"id": 9, "name": "PL2/MO/50001", "product_id": [102, "[NRNS-90NS-BL-Z-C] Grouped SO"],
+                 "product_qty": 2.0, "state": "confirmed", "picking_ids": [],
+                 "origin": "S08869 - Costa Rica"},
             ],
             "stock.picking": [
                 {"id": 201, "name": "PL3/SFP/04631", "state": "waiting", "picking_type_id": [7, "PL3: Store Finished Product"],

@@ -108,10 +108,10 @@ class WorkflowTests(TestCase):
         self.assertEqual(pl.status, PackingList.Status.DRAFT)
         self.assertEqual(pl.lines.count(), 23)
         self.assertEqual(pl.container_no, "PACK0000856")
-        self.assertEqual(pl.parse_warnings, [])
+        self.assertEqual(pl.documents.get().parse_warnings, [])
         resp = self.client.get(reverse("mo_close:record_preview", args=[pl.pk]))
         self.assertContains(resp, "Wellzijn BV")
-        groups = pl.grouped_lines()
+        groups = pl.documents.get().grouped_lines()  # not saved yet: the draft PDF
         self.assertEqual([(g["code"], int(g["qty"])) for g in groups], [
             ("NRNS-60NS-BL-Z-C", 10), ("NRNS-90NS-BL-Z-C", 10), ("NRNF-105NS-BL-Z", 10),
             ("NRNF-120NS-BL-Z", 5), ("NRNF-150NS-BL-Z", 10),
@@ -127,8 +127,8 @@ class WorkflowTests(TestCase):
         self.assertContains(resp, "already exists")
         resp = self.client.post(reverse("mo_close:record_new"), {"so_number": "S05000", "pdf": sample_upload()})
         pl = PackingList.objects.get(so_number="S05000")
-        self.assertIn("The PDF Invoice No. is S04743, but this record is for S05000.", pl.parse_warnings)
-        self.assertIn("Sales Order S05000 was not found in Odoo.", pl.parse_warnings)
+        self.assertIn("The PDF Invoice No. is S04743, but this packing list is for S05000.", pl.documents.get().parse_warnings)
+        self.assertIn("Sales Order S05000 was not found in Odoo.", pl.documents.get().parse_warnings)
 
     def test_step1_cancel_draft(self):
         pl = self.create_record()
@@ -381,6 +381,160 @@ class WorkflowTests(TestCase):
         self.assertEqual((tr.row_progress["done"], tr.row_progress["label"]), (3, "Confirmed"))
         self.assertTrue(pl.pk)
 
+    # --- Parent / child SOs ---
+    def add(self, pl, so, parent_so="", files=1):
+        pdfs = [sample_upload(f"pl{i}.pdf") for i in range(files)]
+        return self.client.post(
+            reverse("mo_close:record_add", args=[pl.pk]), {"so_number": so, "parent_so": parent_so, "pdfs": pdfs}
+        )
+
+    def save_preview(self, pl):
+        return self.client.post(reverse("mo_close:record_preview", args=[pl.pk]), {"action": "save"})
+
+    def test_so_numbers_with_children(self):
+        from mo_close.models import so_in_source, so_parent_number
+        from mo_close.services import normalize_so
+
+        self.assertEqual([normalize_so(v) for v in ("4743-1", "s04743-1-2", "SO4743", " 4743 ")],
+                         ["S04743-1", "S04743-1-2", "S04743", "S04743"])
+        self.assertEqual((so_parent_number("S04743-1-2"), so_parent_number("S04743-1"), so_parent_number("S04743")),
+                         ("S04743-1", "S04743", ""))
+        self.assertEqual(so_in_source("S04743", "Heater for S04743-1"), [])  # that is the child SO
+        self.assertEqual(so_in_source("S04743-1", "Heater for S04743-1"), ["S04743-1"])
+        self.assertEqual(so_in_source("S04743-1", "Heater for SO4743-1 x"), ["SO4743-1"])
+        self.assertEqual(so_in_source("S04743-1", "Heater for S04743-12"), [])
+        self.assertEqual(so_in_source("S04743", "Heater for S04743 - 1500 - target"), ["S04743"])
+
+    def test_new_record_is_parent_only_and_records_list_links_to_upload(self):
+        # New Record: a parent S0 only; existing SOs and child SOs are uploaded from Records.
+        resp = self.client.post(reverse("mo_close:record_new"), {"so_number": "4743-1", "pdf": sample_upload()})
+        self.assertContains(resp, "is a child SO. Go to Records")
+        self.assertFalse(PackingList.objects.exists())
+        pl = self.save_and_generate()
+        resp = self.client.post(reverse("mo_close:record_new"), {"so_number": "4743", "pdf": sample_upload()})
+        self.assertContains(resp, "already exists (record S04743). Go to Records")
+
+        # Records: the SO number opens the upload page for it; child SOs open it with their SO filled in.
+        add_url = reverse("mo_close:record_add", args=[pl.pk])
+        self.assertContains(self.client.get(reverse("mo_close:records")), f'href="{add_url}"')
+        self.assertEqual(self.client.get(add_url).context["form"].initial["so_number"], "S04743")
+        self.add(pl, "4743-1-1")  # grandchild: S04743-1 is created in between
+        self.assertEqual([(n.so_number, n.depth) for n in pl.so_tree()], [("S04743", 0), ("S04743-1", 1), ("S04743-1-1", 2)])
+        self.assertContains(self.client.get(reverse("mo_close:record_preview", args=[pl.pk])), "S04743 › S04743-1 › S04743-1-1")
+        self.save_preview(pl)
+        resp = self.client.get(reverse("mo_close:records"))
+        self.assertNotContains(resp, "?so=")  # child SOs are plain text; only the parent links
+        self.assertContains(resp, "↳ S04743-1-1")
+        resp = self.client.get(add_url, {"so": "S04743-1-1"})
+        self.assertEqual(resp.context["form"].initial["so_number"], "S04743-1-1")
+        # More PDFs for an existing SO of the record.
+        self.add(pl, "S04743", files=2)
+        self.save_preview(pl)
+        self.assertEqual(pl.documents.filter(sales_order__so_number="S04743", saved=True).count(), 3)
+
+        # Without the New Record module the SO number is plain text.
+        self.client.force_login(User.objects.create(username="v@sawo.com", role=Role.objects.create(name="Viewer", modules=["mo_close.records"])))
+        self.assertNotContains(self.client.get(reverse("mo_close:records")), f'href="{add_url}"')
+
+    def test_children_many_pdfs_generate_and_pages(self):
+        pl = self.save_and_generate()
+        self.assertEqual(MORecord.objects.filter(reference="PL1/MO/40001").count(), 0)  # child not in the tree yet
+
+        self.assertRedirects(self.add(pl, "4743-1", files=2), reverse("mo_close:record_preview", args=[pl.pk]))
+        child = pl.sales_orders.get(so_number="S04743-1")
+        self.assertEqual(child.parent.so_number, "S04743")
+        self.assertEqual(child.documents.filter(saved=False).count(), 2)
+        resp = self.client.get(reverse("mo_close:record_detail", args=[pl.pk]))
+        self.assertContains(resp, "2 uploaded packing lists waiting for review")
+        self.save_preview(pl)
+        self.assertEqual(child.documents.filter(saved=True).count(), 2)
+
+        # Another Odoo SO grouped under the parent.
+        self.add(pl, "8869", parent_so="S04743")
+        self.save_preview(pl)
+        self.assertEqual([n.so_number for n in pl.so_tree()], ["S04743", "S04743-1", "S08869"])
+
+        self.client.post(reverse("mo_close:record_generate", args=[pl.pk]))
+        mos = {m.reference: m for m in pl.mos.select_related("sales_order")}
+        self.assertEqual(mos["PL1/MO/40001"].so_number, "S04743-1")  # Source names the child, not the parent
+        self.assertEqual(mos["PL2/MO/50001"].so_number, "S08869")
+        self.assertEqual(mos["PL3/MO/06873"].so_number, "S04743")
+        self.assertEqual(int(mos["PL1/MO/40001"].qty), 20)  # qty from the child's own two packing lists
+        self.assertEqual(len(mos), 6)
+
+        resp = self.client.get(reverse("mo_close:record_detail", args=[pl.pk]))
+        self.assertContains(resp, "child SO of S04743")
+        self.assertContains(resp, "in S04743")  # MO row of a child SO shows its record
+        self.assertEqual(len(resp.context["tree"][1].docs), 2)
+        # Lists find the record by a child SO; the PL tab shows the child's MO.
+        resp = self.client.get(reverse("mo_close:records"), {"q": "8869"})
+        self.assertEqual([p.so_number for p in resp.context["page"].object_list], ["S04743"])
+        self.assertContains(resp, "↳ S08869")
+        resp = self.client.get(reverse("mo_close:records"), {"tab": "PL2"})
+        self.assertEqual([g["mo"].reference for g in resp.context["groups"]], ["PL2/MO/50001"])
+        self.assertContains(self.client.get(reverse("mo_close:progress"), {"q": "4743-1"}), "S04743")
+        for fmt, magic in (("xlsx", b"PK"), ("pdf", b"%PDF")):
+            self.assertTrue(self.client.get(reverse("mo_close:record_export", args=[pl.pk, fmt])).content.startswith(magic))
+
+    def test_cancel_upload_and_remove_packing_list(self):
+        pl = self.save_and_generate()
+        self.add(pl, "4743-2")
+        self.assertTrue(pl.sales_orders.filter(so_number="S04743-2").exists())
+        self.client.post(reverse("mo_close:record_preview", args=[pl.pk]), {"action": "cancel"})
+        self.assertFalse(pl.sales_orders.filter(so_number="S04743-2").exists())  # created for the upload only
+        self.assertTrue(PackingList.objects.filter(pk=pl.pk).exists())
+
+        self.add(pl, "4743-2")
+        self.save_preview(pl)
+        doc = pl.documents.get(sales_order__so_number="S04743-2")
+        self.assertEqual(self.client.post(reverse("mo_close:document_delete", args=[doc.pk])).status_code, 403)
+        self.client.force_login(User.objects.create(username="admin@sawo.com", role=Role.admin()))
+        self.client.post(reverse("mo_close:document_delete", args=[doc.pk]))
+        self.assertFalse(pl.sales_orders.filter(so_number="S04743-2").exists())
+        self.assertTrue(AuditLog.objects.filter(action="Packing list removed").exists())
+
+    def test_remove_child_so_with_its_data_needs_reason(self):
+        pl = self.save_and_generate()
+        self.add(pl, "4743-1")
+        self.save_preview(pl)
+        self.add(pl, "4743-1-1")
+        self.save_preview(pl)
+        self.client.post(reverse("mo_close:record_generate", args=[pl.pk]))
+        child = pl.sales_orders.get(so_number="S04743-1")
+        self.assertTrue(MORecord.objects.filter(reference="PL1/MO/40001", sales_order=child).exists())
+        url = reverse("mo_close:so_remove", args=[child.pk])
+        detail = reverse("mo_close:record_detail", args=[pl.pk])
+
+        # Users without Delete records do not see the × and cannot remove.
+        self.assertNotContains(self.client.get(detail), "is-removable")
+        self.assertEqual(self.client.post(url, {"comment": "x"}).status_code, 403)
+
+        self.client.force_login(User.objects.create(username="admin@sawo.com", role=Role.admin()))
+        self.assertContains(self.client.get(detail), f'data-url="{url}"')
+        resp = self.client.post(url, {"comment": " ", "next": detail}, follow=True)
+        self.assertContains(resp, "A comment is required to remove S04743-1")
+        self.assertTrue(pl.sales_orders.filter(so_number="S04743-1").exists())
+
+        self.client.post(url, {"comment": "Wrong SO, belongs to S04752", "next": detail})
+        self.assertEqual([n.so_number for n in pl.so_tree()], ["S04743"])  # grandchild removed too
+        self.assertFalse(MORecord.objects.filter(reference="PL1/MO/40001").exists())
+        self.assertEqual(pl.documents.count(), 1)
+        self.assertEqual(MORecord.objects.filter(packing_list=pl).count(), 4)  # the parent's MOs stay
+        log = AuditLog.objects.get(action="Child SO removed")
+        self.assertEqual((log.target, log.comment), ("S04743-1", "Wrong SO, belongs to S04752"))
+        self.assertIn("2 SO(s), 2 packing list(s)", log.old_value)
+        root = pl.sales_orders.get()
+        self.assertEqual(self.client.post(reverse("mo_close:so_remove", args=[root.pk]), {"comment": "x"}).status_code, 302)
+        self.assertTrue(pl.sales_orders.filter(pk=root.pk).exists())  # the parent SO is never removed here
+
+    def test_add_refuses_so_of_another_record(self):
+        pl = self.save_and_generate()
+        other = PackingList.objects.create(so_number="S00001", status=PackingList.Status.SAVED, created_by=self.user)
+        other.ensure_root_so()
+        self.assertContains(self.add(pl, "1-1"), "which is in record S00001")
+        self.assertContains(self.add(pl, "S00001"), "belongs to record S00001")
+        self.assertContains(self.add(pl, "9999", parent_so="S00001"), "Select a valid choice")
+
     def test_session_expired_redirects_to_login(self):
         pl = self.save_and_generate()
         self.odoo.expired = True
@@ -399,13 +553,13 @@ class WorkflowTests(TestCase):
             self.assertTrue(resp.content.startswith(magic))
         for name in ("mo_close:dashboard", "mo_close:records", "mo_close:progress"):
             self.assertEqual(self.client.get(reverse(name)).status_code, 200)
-        self.assertEqual(self.client.get(reverse("mo_close:record_pdf", args=[pl.pk])).status_code, 200)
+        self.assertEqual(self.client.get(reverse("mo_close:document_pdf", args=[pl.documents.get().pk])).status_code, 200)
 
     # --- Reports ---
     def _second_record(self):
         return PackingList.objects.create(
             so_number="S00001", status=PackingList.Status.SAVED, sold_to="Aardvark Oy\nFinland",
-            created_by=self.user, pdf="packing_lists/none.pdf",
+            created_by=self.user,
         )
 
     def test_reports_numbers(self):

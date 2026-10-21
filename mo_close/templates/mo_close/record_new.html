@@ -14,7 +14,7 @@
           <label class="form-label fw-semibold small" for="{{ form.so_number.id_for_label }}">{{ form.so_number.label }}</label>
           {{ form.so_number }}
           {% for e in form.so_number.errors %}<div class="text-danger small mt-1">{{ e }}</div>{% endfor %}
-          <div class="small-note mt-1">The Invoice No. on the packing list, e.g. S04743 (4743 also works).</div>
+          <div class="small-note mt-1">The Invoice No. on the packing list, e.g. S04743 (4743 also works).<br>SO already a record? Go to <a href="{% url 'mo_close:records' %}">Records</a>, find it and click its SO number to upload more packing lists or a child SO (e.g. S04743-1).</div>
         </div>
         <div class="mb-4">
           <label class="form-label fw-semibold small" for="{{ form.pdf.id_for_label }}">{{ form.pdf.label }}</label>

@@ -4,6 +4,7 @@ import datetime as dt
 from collections import Counter, OrderedDict
 from dataclasses import dataclass
 
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.http import urlencode
 
@@ -188,13 +189,13 @@ def _stage(row):
 
 
 def build(f):
-    qs = PackingList.objects.exclude(status=PackingList.Status.DRAFT).select_related("created_by")
+    qs = PackingList.objects.exclude(status=PackingList.Status.DRAFT).select_related("created_by").prefetch_related("sales_orders")
     if f.status == "open":
         qs = qs.filter(status__in=[PackingList.Status.SAVED, PackingList.Status.GENERATED])
     elif f.status == "closed":
         qs = qs.filter(status=PackingList.Status.CLOSED)
     if f.so:
-        qs = qs.filter(so_number__icontains=f.so)
+        qs = qs.filter(Q(so_number__icontains=f.so) | Q(sales_orders__so_number__icontains=f.so)).distinct()
     if f.basis == "doc_date":
         qs = qs.exclude(doc_date=None)
         if f.date_from:

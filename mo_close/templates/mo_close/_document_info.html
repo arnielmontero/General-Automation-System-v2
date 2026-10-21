@@ -1,0 +1,44 @@
+{% load mo_close_tags %}
+{# Header information of one packing list PDF. #}
+<div class="card-soft mb-3">
+  <div class="card-head">
+    <h3 class="mb-0"><span class="mono">{{ doc.sales_order.so_number }}</span> <span class="small-note fw-normal">· {{ doc.pdf_name|default:"Packing list"|truncatechars:70 }}</span></h3>
+    <div class="d-flex gap-2">
+      {% if doc.pdf %}<a class="btn btn-soft btn-xs" href="{% url 'mo_close:document_pdf' doc.pk %}" target="_blank"><i class="bi bi-file-earmark-pdf"></i> PDF</a>{% endif %}
+      {% if doc.saved and can_remove and "mo_close.delete" in modules %}
+        <form method="post" action="{% url 'mo_close:document_delete' doc.pk %}" onsubmit="return confirm('Remove packing list {{ doc.pdf_name|escapejs }} from {{ doc.sales_order.so_number }}? Its rows are removed too.')">
+          {% csrf_token %}<button class="btn btn-soft btn-xs text-danger" title="Remove this packing list"><i class="bi bi-trash"></i></button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+  <div class="card-body-soft">
+    <div class="row g-3 small">
+      <div class="col-md-6">
+        <dl class="row mb-0">
+          <dt class="col-4 muted fw-semibold">Sold To</dt><dd class="col-8">{{ doc.sold_to|linebreaksbr|default:"—" }}</dd>
+          <dt class="col-4 muted fw-semibold">Tel. No.</dt><dd class="col-8">{{ doc.tel|default:"—" }}</dd>
+          <dt class="col-4 muted fw-semibold">Fax No.</dt><dd class="col-8">{{ doc.fax|default:"—" }}</dd>
+          <dt class="col-4 muted fw-semibold">ATTN</dt><dd class="col-8 mb-0">{{ doc.attn|default:"—" }}</dd>
+        </dl>
+      </div>
+      <div class="col-md-6">
+        <dl class="row mb-0">
+          <dt class="col-4 muted fw-semibold">Date</dt><dd class="col-8">{{ doc.doc_date_text|default:"—" }}</dd>
+          <dt class="col-4 muted fw-semibold">Invoice No.</dt><dd class="col-8">{{ doc.invoice_no|default:"—" }}</dd>
+          <dt class="col-4 muted fw-semibold">Container No.</dt><dd class="col-8">{{ doc.container_no|default:"—" }}</dd>
+          <dt class="col-4 muted fw-semibold">Seal No.</dt><dd class="col-8">{{ doc.seal_no|default:"—" }}</dd>
+          <dt class="col-4 muted fw-semibold">Destination</dt><dd class="col-8 mb-0">{{ doc.destination|default:"—" }}</dd>
+        </dl>
+      </div>
+    </div>
+    <div class="d-flex flex-wrap gap-3 mt-3 pt-3 border-top small">
+      <span><span class="muted">Total Qty</span> <b>{{ doc.total_qty|qty|default:"—" }}</b></span>
+      <span><span class="muted">Packages</span> <b>{{ doc.total_packages|qty|default:"—" }}</b></span>
+      <span><span class="muted">Net weight</span> <b>{{ doc.total_net_weight|qty|default:"—" }}</b></span>
+      <span><span class="muted">Gross weight</span> <b>{{ doc.total_gross_weight|qty|default:"—" }}</b></span>
+      <span><span class="muted">CBM</span> <b>{{ doc.total_cbm|qty|default:"—" }}</b></span>
+      {% if doc.saved_at %}<span class="ms-auto small-note">Saved {{ doc.saved_at|date:"d-M-Y H:i" }} by {{ doc.created_by.display_name }}</span>{% endif %}
+    </div>
+  </div>
+</div>

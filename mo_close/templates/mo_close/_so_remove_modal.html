@@ -1,0 +1,23 @@
+{% if "mo_close.delete" in modules and tree|length > 1 %}
+<div class="modal fade" id="so-remove-modal" tabindex="-1" aria-labelledby="so-remove-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <form class="modal-content" method="post" id="so-remove-form">
+      {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+      <div class="modal-header">
+        <h5 class="modal-title fs-6 fw-semibold" id="so-remove-title">Remove child SO</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-2">Remove <b class="mono" id="so-remove-name"></b> from {{ pl.so_number }}? <span id="so-remove-what"></span> This cannot be undone.</p>
+        <label class="form-label small fw-semibold" for="so-remove-comment">Reason for removing (required)</label>
+        <textarea class="form-control" name="comment" id="so-remove-comment" rows="3" required></textarea>
+        <div class="small-note mt-1">Saved in the Logs.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-soft btn-sm" data-bs-dismiss="modal">No</button>
+        <button class="btn btn-danger btn-sm">Yes, remove</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}

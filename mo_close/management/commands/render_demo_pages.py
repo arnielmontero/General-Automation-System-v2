@@ -79,7 +79,7 @@ class Command(BaseCommand):
             # A second, older record so the charts and sorting have more than one SO.
             older = PackingList.objects.create(
                 so_number="S04622", status=PackingList.Status.SAVED, sold_to="Saunatec Oy\nFinland",
-                created_by=user, pdf="packing_lists/none.pdf",
+                created_by=user,
             )
             PackingList.objects.filter(pk=older.pk).update(created_at=timezone.now() - timedelta(days=6))
 
@@ -100,7 +100,8 @@ class Command(BaseCommand):
                 (out / f"export.{fmt}").write_bytes(resp.content)
                 resp = client.get(reverse("mo_close:reports_export", args=[fmt]) + "?preset=month")
                 (out / f"report.{fmt}").write_bytes(resp.content)
-            pl.pdf.delete(save=False)  # files are not part of the rolled-back transaction
+            for doc in pl.documents.all():
+                doc.pdf.delete(save=False)  # files are not part of the rolled-back transaction
         client.logout()
         self._save(client, out, {"login": reverse("login")})
 

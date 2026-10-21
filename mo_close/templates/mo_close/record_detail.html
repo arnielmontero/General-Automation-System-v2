@@ -4,6 +4,7 @@
 {% block page_kicker %}Record · {{ pl.sold_to_name|default:"MO's To Be Close" }}{% endblock %}
 {% block page_title %}{{ pl.so_number }}{% endblock %}
 {% block header_actions %}
+  {% if "mo_close.create" in modules %}<a class="btn btn-soft btn-sm" href="{% url 'mo_close:record_add' pl.pk %}"><i class="bi bi-upload"></i> Upload packing lists</a>{% endif %}
   {% if pl.status != "closed" and "mo_close.generate" in modules %}
     <form method="post" action="{% url 'mo_close:record_generate' pl.pk %}" onsubmit="this.querySelector('button').disabled=true">
       {% csrf_token %}
@@ -34,9 +35,21 @@
 {% block content %}
 {% include "mo_close/_progress_summary.html" %}
 
+{% if drafts %}
+  <div class="alert alert-warning py-2 d-flex align-items-center gap-2"><i class="bi bi-hourglass-split"></i>
+    {{ drafts }} uploaded packing list{{ drafts|pluralize }} waiting for review.
+    {% if "mo_close.create" in modules %}<a class="btn btn-sm btn-primary ms-auto" href="{% url 'mo_close:record_preview' pl.pk %}">Review</a>{% endif %}
+  </div>
+{% endif %}
+{% if tree|length > 1 %}
+  <div class="so-strip mb-3"><span class="small-note">Sales orders</span>
+    {% for n in tree %}{% if n.depth and "mo_close.delete" in modules %}<span class="so-chip is-removable" role="button" tabindex="0" style="--depth: {{ n.depth }}" title="Remove {{ n.so_number }} and its data ({{ n.path }})" data-bs-toggle="modal" data-bs-target="#so-remove-modal" data-so="{{ n.so_number }}" data-url="{% url 'mo_close:so_remove' n.pk %}" data-docs="{{ n.docs|length }}" data-children="{{ n.children.count }}">↳ {{ n.so_number }}<span class="so-remove" aria-hidden="true">×</span></span>{% else %}<span class="so-chip {% if not n.depth %}is-parent{% endif %}" style="--depth: {{ n.depth }}" title="{{ n.path }}">{% if n.depth %}↳ {% endif %}{{ n.so_number }}</span>{% endif %}{% endfor %}
+  </div>
+{% endif %}
+
 <ul class="nav nav-tabs mb-0" role="tablist">
   <li class="nav-item"><button class="nav-link {% if tab == 'mos' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#tab-mos" type="button">MO's &amp; Transfers ({{ progress.total }})</button></li>
-  <li class="nav-item"><button class="nav-link {% if tab == 'lines' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#tab-lines" type="button">Packing List ({{ lines|length }})</button></li>
+  <li class="nav-item"><button class="nav-link {% if tab == 'lines' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#tab-lines" type="button">Packing List ({{ line_count }})</button></li>
   {% if pl.generated_at %}<li class="nav-item"><button class="nav-link {% if tab == 'unmatched' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#tab-unmatched" type="button">No MO found {% if unmatched %}<span class="pill pill-sm tone-red">{{ unmatched|length }}</span>{% endif %}</button></li>{% endif %}
   <li class="nav-item"><button class="nav-link {% if tab == 'info' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#tab-info" type="button">Information</button></li>
   <li class="nav-item"><button class="nav-link {% if tab == 'logs' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#tab-logs" type="button">Logs</button></li>
@@ -65,18 +78,24 @@
       {% else %}
         {% if source_fixes %}<div class="card-body-soft small pb-0"><span class="pill pill-sm tone-orange">Source fix</span>
           {{ source_fixes|length }} MO{{ source_fixes|length|pluralize }} {{ source_fixes|length|pluralize:"has,have" }} the SO written wrong in the Odoo Source ({% for mo in source_fixes %}{{ mo.reference }}: <span class="mono">{{ mo.source_fix }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}).
-          The system auto-corrected {{ source_fixes|length|pluralize:"it,them" }} to <span class="mono fw-semibold">{{ pl.so_number }}</span> — please correct the Source in Odoo.</div>{% endif %}
+          The system auto-corrected {{ source_fixes|length|pluralize:"it,them" }} ({% for mo in source_fixes %}<span class="mono fw-semibold">{{ mo.so_number }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}) — please correct the Source in Odoo.</div>{% endif %}
         <div class="table-responsive">
           <table class="table table-soft table-compact">
             <thead><tr><th>SO#</th><th>FG Code</th><th>FG</th><th class="text-end">Qty</th><th>MO / Transfer</th><th>State</th><th>Progress</th><th>SF-Innova</th><th>SF-Electrical</th><th>Marked done</th><th>System check</th><th>Final confirmation</th></tr></thead>
             {% for group in groups %}
-              {% ifchanged group.mo.on_packing_list %}{% if not group.mo.on_packing_list %}
-                <tbody><tr><td colspan="12" class="fw-semibold pt-3">Components / sub-assemblies <span class="small-note fw-normal">— MOs made for {{ pl.so_number }} whose product is not on the packing list</span></td></tr></tbody>
-              {% endif %}{% endifchanged %}
+              {% if group.so_head %}{% with n=group.so_head %}
+                <tbody><tr class="so-head-row"><td colspan="12" style="--depth: {{ n.depth }}">
+                  {% if n.depth %}↳ {% endif %}<span class="mono fw-bold">{{ n.so_number }}</span>
+                  {% if n.depth %}<span class="small-note">child SO of {{ n.parent.so_number }}</span>{% else %}<span class="pill pill-sm tone-blue">Parent</span>{% endif %}
+                </td></tr></tbody>
+              {% endwith %}{% endif %}
+              {% if group.comp_head %}
+                <tbody><tr><td colspan="12" class="fw-semibold pt-3">Components / sub-assemblies <span class="small-note fw-normal">— MOs made for {{ group.mo.so_number }} whose product is not on the packing list</span></td></tr></tbody>
+              {% endif %}
               {% include "mo_close/_mo_group.html" %}
             {% empty %}
               <tbody><tr><td colspan="12" class="text-center muted py-4">
-                {% if f == "all" %}No MO's in Confirmed / In Progress / To Close with {{ pl.so_number }} in their Source were found in Odoo — they may all be Done already.{% else %}No rows for this filter.{% endif %}
+                {% if f == "all" %}No MO's in Confirmed / In Progress / To Close with {{ pl.so_number }}{% if tree|length > 1 %} or its child SOs{% endif %} in their Source were found in Odoo — they may all be Done already.{% else %}No rows for this filter.{% endif %}
               </td></tr></tbody>
             {% endfor %}
           </table>
@@ -92,8 +111,24 @@
   {# --- Step 1: packing list --- #}
   <div class="tab-pane fade {% if tab == 'lines' %}show active{% endif %}" id="tab-lines">
     <div class="card-soft" style="border-top-left-radius:0">
-      <div class="card-head"><h3>List data from the PDF</h3><span class="small-note">Saved {{ pl.saved_at|date:"d-M-Y H:i" }} by {{ pl.created_by.display_name }}</span></div>
-      {% include "mo_close/_lines_tables.html" with groups=lines %}
+      <div class="card-head"><h3>List data from the PDFs</h3><span class="small-note">By SO — parent first, each child SO under its parent</span></div>
+      {% for n in tree %}
+        <div class="so-section" style="--depth: {{ n.depth }}">
+          <div class="so-section-head">
+            {% if n.depth %}↳ {% endif %}<span class="mono fw-bold">{{ n.so_number }}</span>
+            {% if n.depth %}<span class="small-note">child SO of {{ n.parent.so_number }}</span>{% else %}<span class="pill pill-sm tone-blue">Parent</span>{% endif %}
+            <span class="small-note">· {{ n.docs|length }} packing list{{ n.docs|length|pluralize }}</span>
+          </div>
+          {% for doc in n.docs %}
+            <div class="doc-head small"><i class="bi bi-file-earmark-pdf"></i>
+              {% if doc.pdf %}<a href="{% url 'mo_close:document_pdf' doc.pk %}" target="_blank">{{ doc.pdf_name|default:"Packing list" }}</a>{% else %}{{ doc.pdf_name }}{% endif %}
+              <span class="small-note">· saved {{ doc.saved_at|date:"d-M-Y H:i" }} by {{ doc.created_by.display_name }}</span></div>
+            {% include "mo_close/_lines_tables.html" %}
+          {% empty %}
+            <div class="card-body-soft small muted py-2">No packing list for this SO yet.</div>
+          {% endfor %}
+        </div>
+      {% endfor %}
     </div>
   </div>
 
@@ -104,12 +139,12 @@
       <div class="card-body-soft small muted pb-0">No MO in Confirmed / In Progress / To Close with this product was found for {{ pl.so_number }}. The MO may already be Done, not created yet, or the item is not manufactured.</div>
       <div class="table-responsive">
         <table class="table table-soft">
-          <thead><tr><th>External Code</th><th>Description</th><th class="text-end">Qty</th></tr></thead>
+          <thead><tr><th>SO</th><th>External Code</th><th>Description</th><th class="text-end">Qty</th></tr></thead>
           <tbody>
-          {% for g in unmatched %}
-            <tr><td class="mono fw-semibold">{{ g.code|default:"(no code)" }}</td><td>{{ g.description }}</td><td class="text-end">{{ g.qty|qty }}</td></tr>
+          {% for n, g in unmatched %}
+            <tr><td class="mono" title="{{ n.path }}">{{ n.so_number }}</td><td class="mono fw-semibold">{{ g.code|default:"(no code)" }}</td><td>{{ g.description }}</td><td class="text-end">{{ g.qty|qty }}</td></tr>
           {% empty %}
-            <tr><td colspan="3" class="text-center muted py-4">Every packing list code has an MO.</td></tr>
+            <tr><td colspan="4" class="text-center muted py-4">Every packing list code has an MO.</td></tr>
           {% endfor %}
           </tbody>
         </table>
@@ -130,5 +165,6 @@
   </div>
 </div>
 {% include "mo_close/_sf_modal.html" %}
+{% include "mo_close/_so_remove_modal.html" %}
 {% endblock %}
-{% block scripts %}<script src="{% static 'js/sf-done.js' %}"></script>{% endblock %}
+{% block scripts %}<script src="{% static 'js/sf-done.js' %}"></script><script src="{% static 'js/so-remove.js' %}"></script>{% endblock %}

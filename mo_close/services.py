@@ -17,13 +17,17 @@ from core.odoo import MO_STATES, PICKING_STATES, OdooAccessError, OdooError, Odo
 from .models import (
     SYSTEM,
     MORecord,
+    PackingDocument,
     PackingLine,
     PackingList,
+    SalesOrder,
     TransferRecord,
     norm_code,
+    so_base_digits,
     so_digits,
     so_in_source,
     so_is_customer_code,
+    so_parent_number,
 )
 from .pdf_parser import parse_date
 
@@ -46,21 +50,20 @@ def log(request, section, action, record, **kwargs):
 
 
 def normalize_so(value):
-    """'4743', 's04743', ' S04743 ' → 'S04743'."""
+    """'4743', 's04743', ' S04743 ', 'SO4743' → 'S04743'; child SOs keep their suffix: '4743-1' → 'S04743-1'."""
     value = (value or "").strip().upper().replace(" ", "")
-    if value.isdigit():
-        value = "S" + value.zfill(5)
+    m = re.match(r"^(?:SO|S)?0*(\d+)((?:-\d+)*)$", value)
+    if m:
+        value = "S" + m.group(1).zfill(5) + m.group(2)
     return value
 
 
-SO_RE = re.compile(r"^S\d{3,}$")
+SO_RE = re.compile(r"^S\d{3,}(?:-\d+)*$")
 
 
 def validate_so(so):
     if not SO_RE.match(so):
-        raise ValidationError("Enter a Sales Order number like S04743.")
-    if PackingList.objects.filter(so_number=so).exists():
-        raise ValidationError(f"A record for {so} already exists.")
+        raise ValidationError("Enter a Sales Order number like S04743, or a child SO like S04743-1.")
 
 
 def so_exists_in_odoo(client, so):
@@ -71,22 +74,92 @@ def so_exists_in_odoo(client, so):
         return None
 
 
+def find_so(so):
+    return SalesOrder.objects.select_related("record", "parent").filter(so_number=so).first()
+
+
+def _check_new_so(so):
+    node = find_so(so)
+    if node is not None:
+        raise ValidationError(f"{so} already exists in record {node.record.so_number}.")
+    if PackingList.objects.filter(so_number=so).exists():
+        raise ValidationError(f"A record for {so} already exists.")
+
+
 @transaction.atomic
-def create_draft(request, so, uploaded_file, parsed, odoo_check):
+def place_so(request, so, parent_so="", record=None):
+    """The SalesOrder node an upload goes to, created when new: under ``parent_so`` when given, else under
+    the parent its name shows (S04743-1-2 → S04743-1 → S04743; missing ones are created), else under the
+    root of ``record`` (adding from a record page), else as a new record of its own. An SO that already
+    exists is only reused when adding from its record's page."""
+    existing = find_so(so)
+    if existing is not None:
+        if record is None:
+            raise ValidationError(
+                f"{so} already exists in record {existing.record.so_number} — open the record and use Add packing lists."
+            )
+        if existing.record_id != record.pk:
+            raise ValidationError(f"{so} belongs to record {existing.record.so_number}.")
+        return existing
+    _check_new_so(so)
+
+    if parent_so:
+        parent = find_so(parent_so)
+        if parent is None:
+            raise ValidationError(f"Parent SO {parent_so} was not found. Create it first.")
+        if record is not None and parent.record_id != record.pk:
+            raise ValidationError(f"Parent SO {parent_so} belongs to record {parent.record.so_number}.")
+        return _new_so(request, parent.record, parent, so)
+
+    # Parent by name: walk up until an existing SO; the ones in between are created too.
+    chain, name, parent = [so], so_parent_number(so), None
+    while name:
+        parent = find_so(name)
+        if parent is not None:
+            break
+        chain.append(name)
+        name = so_parent_number(name)
+    if parent is not None:
+        if record is not None and parent.record_id != record.pk:
+            raise ValidationError(f"{so} belongs under {parent.so_number}, which is in record {parent.record.so_number}.")
+    elif record is not None:
+        parent = record.ensure_root_so()
+    else:
+        top = chain.pop()
+        _check_new_so(top)
+        pl = PackingList.objects.create(so_number=top, status=PackingList.Status.DRAFT, created_by=request.user)
+        log(request, Section.RECORD, "Record created", pl, new=top)
+        parent = pl.ensure_root_so()
+    for name in reversed(chain):
+        parent = _new_so(request, parent.record, parent, name)
+    return parent
+
+
+def _new_so(request, pl, parent, so):
+    node = SalesOrder.objects.create(record=pl, parent=parent, so_number=so, created_by=request.user)
+    log(request, Section.RECORD, "Child SO added", pl, target=so, new=f"under {parent.so_number}")
+    return node
+
+
+@transaction.atomic
+def add_document(request, node, uploaded_file, parsed, odoo_check):
+    """One uploaded packing list PDF for an SO of the tree, waiting for review (Save / Cancel)."""
+    pl = node.record
+    so = node.so_number
     header = parsed.header
     warnings = list(parsed.warnings)
     invoice = (header.get("invoice_no") or "").strip().upper()
-    if invoice and invoice != so:
-        warnings.insert(0, f"The PDF Invoice No. is {invoice}, but this record is for {so}.")
+    if invoice and normalize_so(invoice) != so:
+        warnings.insert(0, f"The PDF Invoice No. is {invoice}, but this packing list is for {so}.")
     if odoo_check is False:
         warnings.insert(0, f"Sales Order {so} was not found in Odoo.")
     elif odoo_check is None:
         warnings.append("Could not verify the Sales Order in Odoo (no access to Sales Orders).")
 
     totals = parsed.totals or {}
-    pl = PackingList.objects.create(
-        so_number=so,
-        status=PackingList.Status.DRAFT,
+    doc = PackingDocument.objects.create(
+        record=pl,
+        sales_order=node,
         sold_to=header.get("sold_to", ""),
         tel=header.get("tel", ""),
         fax=header.get("fax", ""),
@@ -110,6 +183,7 @@ def create_draft(request, so, uploaded_file, parsed, odoo_check):
     PackingLine.objects.bulk_create(
         PackingLine(
             packing_list=pl,
+            document=doc,
             line_no=line["line_no"],
             external_code=line["external_code"][:100],
             description=line["description"][:500],
@@ -122,26 +196,103 @@ def create_draft(request, so, uploaded_file, parsed, odoo_check):
         )
         for line in parsed.lines
     )
-    log(request, Section.RECORD, "PDF uploaded", pl, target=pl.pdf_name, new=f"{len(parsed.lines)} rows")
+    pl.sync_header()
+    log(request, Section.RECORD, "PDF uploaded", pl, target=doc.pdf_name, new=f"{so} · {len(parsed.lines)} rows")
+    return doc
+
+
+@transaction.atomic
+def save_drafts(request, pl):
+    """Save the packing lists waiting for review. Their lines count from the next Generate from Odoo."""
+    now = timezone.now()
+    drafts = list(pl.documents.filter(saved=False).select_related("sales_order"))
+    for doc in drafts:
+        doc.saved, doc.saved_at = True, now
+        doc.save(update_fields=["saved", "saved_at"])
+        log(request, Section.RECORD, "Packing list saved", pl, target=doc.pdf_name,
+            new=f"{doc.sales_order.so_number} · {doc.lines.count()} rows")
+    if pl.status == PackingList.Status.DRAFT:
+        pl.status, pl.saved_at = PackingList.Status.SAVED, now
+        pl.save(update_fields=["status", "saved_at"])
+    elif pl.status == PackingList.Status.CLOSED and drafts:
+        pl.status, pl.closed_at = PackingList.Status.GENERATED, None  # new packing lists: generate again
+        pl.save(update_fields=["status", "closed_at"])
+    pl.sync_header()
+    return drafts
+
+
+def _prune_empty_sos(pl):
+    """Remove child SOs left without packing lists, MOs or children (e.g. after a cancelled upload)."""
+    while True:
+        empty = SalesOrder.objects.filter(record=pl, parent__isnull=False, documents=None, mos=None, children=None)
+        if not empty.exists():
+            return
+        empty.delete()
+
+
+@transaction.atomic
+def discard_drafts(request, pl):
+    """Cancel an upload: its PDFs, the child SOs created for it, and the record itself when nothing is saved."""
+    for doc in pl.documents.filter(saved=False):
+        log(request, Section.RECORD, "Upload cancelled", pl, target=doc.pdf_name)
+        doc.pdf.delete(save=False)
+        doc.delete()
+    _prune_empty_sos(pl)
+    if pl.status == PackingList.Status.DRAFT and not pl.documents.exists():
+        pl.delete()
+        return None
+    pl.sync_header()
     return pl
 
 
-def save_record(request, pl):
-    pl.status = PackingList.Status.SAVED
-    pl.saved_at = timezone.now()
-    pl.save(update_fields=["status", "saved_at"])
-    log(request, Section.RECORD, "Record saved", pl, new=f"{pl.lines.count()} rows")
+@transaction.atomic
+def delete_document(request, doc):
+    pl = doc.record
+    log(request, Section.RECORD, "Packing list removed", pl, target=doc.pdf_name, old=doc.sales_order.so_number)
+    doc.pdf.delete(save=False)
+    doc.delete()
+    _prune_empty_sos(pl)
+    pl.sync_header()
 
 
-def discard_draft(request, pl):
-    log(request, Section.RECORD, "Draft cancelled", pl, target=pl.pdf_name)
-    pl.pdf.delete(save=False)
-    pl.delete()
+@transaction.atomic
+def remove_child_so(request, node, comment):
+    """Remove a child SO added by mistake, with everything under it: its child SOs, their packing lists (PDFs
+    and rows) and the MOs / transfers found for them. The reason is required and kept in the logs."""
+    if not request.user.can("mo_close.delete"):
+        raise PermissionDenied
+    if node.is_root:
+        raise ValidationError("The parent SO cannot be removed here — delete the record instead.")
+    comment = (comment or "").strip()
+    if not comment:
+        raise ValidationError(f"A comment is required to remove {node.so_number}.")
+    pl = node.record
+    subtree, todo = [], [node]
+    while todo:
+        n = todo.pop()
+        subtree.append(n)
+        todo.extend(n.children.all())
+    docs = list(PackingDocument.objects.filter(sales_order__in=subtree))
+    mos = MORecord.objects.filter(sales_order__in=subtree)
+    transfers = TransferRecord.objects.filter(mo__in=mos).count()
+    summary = (
+        f"{len(subtree)} SO(s), {len(docs)} packing list(s), {PackingLine.objects.filter(document__in=docs).count()} rows, "
+        f"{mos.count()} MO(s), {transfers} transfer(s)"
+    )
+    log(request, Section.RECORD, "Child SO removed", pl, target=node.so_number, old=summary, comment=comment)
+    for doc in docs:
+        doc.pdf.delete(save=False)
+    mos.delete()
+    node.delete()  # cascades to its child SOs, packing lists and rows
+    pl.sync_header()
+    pl.update_status()
+    return summary
 
 
 def delete_record(request, pl):
     log(request, Section.RECORD, "Record deleted", pl, old=pl.get_status_display())
-    pl.pdf.delete(save=False)
+    for doc in pl.documents.all():
+        doc.pdf.delete(save=False)
     pl.delete()
 
 
@@ -193,29 +344,38 @@ def generate_from_odoo(request, pl, client):
     and comment."""
     now = timezone.now()
     result = GenerateResult()
+    pl.ensure_root_so()
+    nodes = pl.so_tree()
     groups = {g["norm"]: g for g in pl.grouped_lines() if g["norm"]}
+    node_groups = {n.pk: {g["norm"]: g for g in n.grouped_lines() if g["norm"]} for n in nodes}
 
-    # Search the number only (the Source may say S08027, SO8027 …), then keep whole-SO matches.
+    # Search the numbers only (the Source may say S08027, SO8027 …) for every SO of the tree, then keep
+    # whole-SO matches. Each MO goes to the most specific SO its Source names (S04743-1 over S04743).
+    bases = sorted({so_base_digits(n.so_number) for n in nodes})
+    domain = ["|"] * (len(bases) - 1) + [("origin", "ilike", b) for b in bases]
     mos = client.search_read(
-        "mrp.production",
-        [("origin", "ilike", so_digits(pl.so_number)), ("state", "in", list(REQUIRED_MO_STATES))],
-        MO_FIELDS,
-        order="name",
+        "mrp.production", domain + [("state", "in", list(REQUIRED_MO_STATES))], MO_FIELDS, order="name"
     )
+    origins = [m.get("origin") for m in mos]
     # A bare number (no S / O) only counts when the number is not also a customer code in these Sources.
-    bare = not so_is_customer_code(pl.so_number, [m.get("origin") for m in mos])
-    mos = [m for m in mos if so_in_source(pl.so_number, m.get("origin"), bare=bare)]
+    bare = {n.pk: not so_is_customer_code(n.so_number, origins) for n in nodes}
 
-    product_ids = {_m2o(m["product_id"])[0] for m in mos} - {None}
+    def owner(origin):
+        found = [n for n in nodes if so_in_source(n.so_number, origin, bare=bare[n.pk])]
+        return max(found, key=lambda n: (len(so_digits(n.so_number)), n.depth)) if found else None
+
+    mos = [(m, node) for m in mos if (node := owner(m.get("origin"))) is not None]
+
+    product_ids = {_m2o(m["product_id"])[0] for m, _ in mos} - {None}
     products = {p["id"]: p for p in client.read("product.product", product_ids, ["default_code", "name"])}
 
     with transaction.atomic():
         matched = []  # (MORecord, picking ids)
-        for m in mos:
+        for m, node in mos:
             product_id, product_label = _m2o(m["product_id"])
             product = products.get(product_id) or {}
             code = product.get("default_code") or ""
-            group = groups.get(norm_code(code))
+            group = node_groups[node.pk].get(norm_code(code)) or groups.get(norm_code(code))  # own SO first
             on_packing_list = group is not None
             if not on_packing_list:
                 # MO of this SO for a product that is not on the packing list (component / sub-assembly).
@@ -229,6 +389,7 @@ def generate_from_odoo(request, pl, client):
                 _set_state(rec, m["state"], now, result, MO_STATES)
             rec.reference = m["name"]
             rec.state = m["state"]
+            rec.sales_order = node
             rec.on_packing_list = on_packing_list
             rec.fg_code = group["code"][:100]
             rec.fg_description = group["description"][:500]

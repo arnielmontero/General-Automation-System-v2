@@ -172,7 +172,7 @@
       <tbody>
       {% for s in per_so %}
         <tr>
-          <td class="fw-semibold">{% if "mo_close.records" in modules %}<a href="{% url 'mo_close:record_detail' s.pl.pk %}">{{ s.pl.so_number }}</a>{% else %}{{ s.pl.so_number }}{% endif %}</td>
+          <td class="fw-semibold">{% if "mo_close.records" in modules %}<a href="{% url 'mo_close:record_detail' s.pl.pk %}">{{ s.pl.so_number }}</a>{% else %}{{ s.pl.so_number }}{% endif %}{% include "mo_close/_so_children.html" with pl=s.pl %}</td>
           <td>{{ s.pl.sold_to_name|default:"—" }}</td>
           <td class="text-nowrap">{{ s.date|date:"d-M-Y"|default:"—" }}</td>
           <td>{% record_pill s.pl %}</td>

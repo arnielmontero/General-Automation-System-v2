@@ -1,25 +1,35 @@
 {% extends "base.html" %}
 {% block title %}Review {{ pl.so_number }}{% endblock %}
-{% block page_kicker %}Step 1 · Review the PDF before saving{% endblock %}
-{% block page_title %}{{ pl.so_number }} <span class="pill tone-gray align-middle">Draft</span>{% endblock %}
+{% block page_kicker %}Step 1 · Review the PDFs before saving{% endblock %}
+{% block page_title %}{{ pl.so_number }} {% if pl.status == "draft" %}<span class="pill tone-gray align-middle">Draft</span>{% endif %}{% endblock %}
 {% block header_actions %}
   <form method="post" class="d-flex gap-2">
     {% csrf_token %}
     <button class="btn btn-soft btn-sm" name="action" value="cancel" onclick="return confirm('Cancel this upload?')"><i class="bi bi-x-lg"></i> Cancel</button>
-    <button class="btn btn-primary btn-sm" name="action" value="save"><i class="bi bi-check2"></i> Save record</button>
+    <button class="btn btn-primary btn-sm" name="action" value="save"><i class="bi bi-check2"></i> Save {{ drafts|length }} packing list{{ drafts|length|pluralize }}</button>
   </form>
 {% endblock %}
 {% block content %}
-{% for w in pl.parse_warnings %}
-  <div class="alert alert-warning py-2"><i class="bi bi-exclamation-triangle"></i> {{ w }}</div>
-{% empty %}
-  <div class="alert alert-success py-2"><i class="bi bi-check-circle"></i> PDF read successfully: {{ pl.lines.count }} rows, totals match the Grand Total.</div>
-{% endfor %}
-
-{% include "mo_close/_record_info.html" %}
-
-<div class="card-soft">
-  <div class="card-head"><h2>List data ({{ groups|length }} codes · {{ pl.lines.count }} PDF rows)</h2></div>
-  {% include "mo_close/_lines_tables.html" with raw_lines=pl.lines.all %}
+{% if tree|length > 1 %}
+<div class="card-soft mb-3">
+  <div class="card-head"><h2>Sales orders of {{ pl.so_number }}</h2></div>
+  <div class="card-body-soft">{% include "mo_close/_so_tree.html" %}</div>
 </div>
+{% endif %}
+
+{% for doc in drafts %}
+  <div class="doc-review mb-4">
+    <div class="small fw-semibold mb-2"><i class="bi bi-file-earmark-pdf"></i> {{ forloop.counter }} / {{ drafts|length }} · {{ doc.sales_order.path }}</div>
+    {% for w in doc.parse_warnings %}
+      <div class="alert alert-warning py-2"><i class="bi bi-exclamation-triangle"></i> {{ w }}</div>
+    {% empty %}
+      <div class="alert alert-success py-2"><i class="bi bi-check-circle"></i> {{ doc.pdf_name }} read successfully: {{ doc.lines.all|length }} rows, totals match the Grand Total.</div>
+    {% endfor %}
+    {% include "mo_close/_document_info.html" %}
+    <div class="card-soft">
+      <div class="card-head"><h2>List data ({{ doc.groups|length }} codes · {{ doc.lines.all|length }} PDF rows)</h2></div>
+      {% include "mo_close/_lines_tables.html" %}
+    </div>
+  </div>
+{% endfor %}
 {% endblock %}

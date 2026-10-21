@@ -5,6 +5,7 @@ from django.db.models import Case, Count, F, FloatField, IntegerField, OuterRef,
 from django.db.models.functions import Cast, Coalesce, Lower
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import urlencode
 from django.views.decorators.http import require_POST
@@ -15,8 +16,8 @@ from core.odoo import OdooError, OdooSessionExpired, client_for
 from core.permissions import module_required
 
 from . import exports, report_exports, reports, services
-from .forms import NewRecordForm
-from .models import SYSTEM, MORecord, PackingList, TransferRecord, norm_code
+from .forms import NewRecordForm, UploadForm
+from .models import SYSTEM, MORecord, PackingDocument, PackingList, SalesOrder, TransferRecord, group_lines, norm_code
 from .pdf_parser import PackingListParseError, parse_packing_list
 
 ROW_FILTERS = {
@@ -31,7 +32,7 @@ ROW_FILTERS = {
 PLANTS = ["PL1", "PL2", "PL3"]
 PLANT_SHOW = {"open": "Open records", "closed": "Closed records", "all": "All records"}
 ROW_RELATED = ["user_done_by", "final_confirmed_by"]
-MO_RELATED = ["packing_list", *ROW_RELATED, *MORecord.SF_RELATED]
+MO_RELATED = ["packing_list", "sales_order", *ROW_RELATED, *MORecord.SF_RELATED]
 
 
 def _row_q(f, prefix=""):
@@ -89,6 +90,7 @@ def dashboard(request):
     active = list(
         PackingList.objects.filter(status__in=[PackingList.Status.SAVED, PackingList.Status.GENERATED])
         .select_related("created_by")
+        .prefetch_related("sales_orders")
         .order_by("-generated_at", "-created_at")[:10]
     )
     counts = services.progress_counts(active)
@@ -99,6 +101,18 @@ def dashboard(request):
 
 
 # --- Step 1: records -------------------------------------------------------------------------
+
+
+def _records_matching(q):
+    """Ids of records whose parent or any child SO matches, or the Sold To / container / invoice of any PDF."""
+    return PackingList.objects.filter(
+        Q(so_number__icontains=q)
+        | Q(sales_orders__so_number__icontains=q)
+        | Q(sold_to__icontains=q)
+        | Q(documents__sold_to__icontains=q)
+        | Q(documents__container_no__icontains=q)
+        | Q(documents__invoice_no__icontains=q)
+    ).values("pk")
 
 
 def _plant_counts():
@@ -112,16 +126,16 @@ def records(request):
     tab = request.GET.get("tab", "").upper()
     if tab in PLANTS:
         return _plant_records(request, tab)
-    qs = PackingList.objects.select_related("created_by")
+    qs = PackingList.objects.select_related("created_by").prefetch_related("sales_orders")
     q = request.GET.get("q", "").strip()
     status = request.GET.get("status", "")
     if q:
-        qs = qs.filter(
-            Q(so_number__icontains=q) | Q(sold_to__icontains=q) | Q(container_no__icontains=q) | Q(invoice_no__icontains=q)
-        )
+        qs = qs.filter(pk__in=_records_matching(q))
     if status in PackingList.Status.values:
         qs = qs.filter(status=status)
-    qs = qs.annotate(line_count=Count("lines")).order_by("-created_at")
+    qs = qs.annotate(
+        line_count=Count("lines", filter=Q(lines__document__saved=True)), so_count=Count("sales_orders", distinct=True)
+    ).order_by("-created_at")
     page = Paginator(qs, 20).get_page(request.GET.get("page"))
     counts = services.progress_counts(page.object_list)
     for pl in page.object_list:
@@ -159,6 +173,7 @@ def _plant_records(request, plant):
     if q:
         qs = qs.filter(
             Q(packing_list__so_number__icontains=q)
+            | Q(sales_order__so_number__icontains=q)
             | Q(reference__icontains=q)
             | Q(fg_code__icontains=q)
             | Q(fg_description__icontains=q)
@@ -200,44 +215,120 @@ def _plant_records(request, plant):
     )
 
 
+def _upload(request, form, record=None):
+    """Read every PDF, place the SO in the tree (creating the record / child SOs) and add the PDFs for review.
+    Returns the record, or None with the errors on the form."""
+    so, parent_so, files = form.cleaned_data["so_number"], form.cleaned_data["parent_so"], form.cleaned_data["pdfs"]
+    parsed = []
+    for upload in files:
+        try:
+            parsed.append(parse_packing_list(upload))
+        except PackingListParseError as exc:
+            form.add_error("pdfs", f"{upload.name}: {exc}")
+    if form.errors:
+        return None
+    try:
+        node = services.place_so(request, so, parent_so, record)
+    except ValidationError as exc:
+        form.add_error("so_number", exc.messages)
+        return None
+    try:
+        odoo_check = services.so_exists_in_odoo(client_for(request), so)
+    except OdooSessionExpired:
+        raise
+    except OdooError:
+        odoo_check = None
+    for upload, result in zip(files, parsed):
+        upload.seek(0)
+        services.add_document(request, node, upload, result, odoo_check)
+    return node.record
+
+
 @module_required("mo_close.create")
 def record_new(request):
+    """New Record: a parent S0 with its packing list PDF. Existing SOs are uploaded to from Records."""
     form = NewRecordForm(request.POST or None, request.FILES or None)
     if request.method == "POST" and form.is_valid():
         so = form.cleaned_data["so_number"]
         upload = form.cleaned_data["pdf"]
-        try:
-            parsed = parse_packing_list(upload)
-        except PackingListParseError as exc:
-            form.add_error("pdf", str(exc))
+        existing = services.find_so(so)
+        if existing is not None:
+            form.add_error(
+                "so_number",
+                f"{so} already exists (record {existing.record.so_number}). Go to Records, find it and click its SO "
+                "number to upload more packing lists.",
+            )
         else:
-            upload.seek(0)
             try:
-                odoo_check = services.so_exists_in_odoo(client_for(request), so)
-            except OdooSessionExpired:
-                raise
-            except OdooError:
-                odoo_check = None
-            pl = services.create_draft(request, so, upload, parsed, odoo_check)
-            return redirect("mo_close:record_preview", pk=pl.pk)
+                parsed = parse_packing_list(upload)
+            except PackingListParseError as exc:
+                form.add_error("pdf", str(exc))
+            else:
+                upload.seek(0)
+                try:
+                    odoo_check = services.so_exists_in_odoo(client_for(request), so)
+                except OdooSessionExpired:
+                    raise
+                except OdooError:
+                    odoo_check = None
+                try:
+                    node = services.place_so(request, so)
+                except ValidationError as exc:
+                    form.add_error("so_number", exc.messages)
+                else:
+                    services.add_document(request, node, upload, parsed, odoo_check)
+                    return redirect("mo_close:record_preview", pk=node.record_id)
     return render(request, "mo_close/record_new.html", {"form": form})
 
 
 @module_required("mo_close.create")
-def record_preview(request, pk):
+def record_add(request, pk):
+    """Upload packing lists to a record (Records → click the SO number): for an SO already in its tree, or a
+    new child SO under one of them. ``?so=`` fills in the SO that was clicked."""
     pl = get_object_or_404(PackingList, pk=pk)
-    if pl.status != PackingList.Status.DRAFT:
+    initial = {"so_number": request.GET.get("so") or pl.so_number}
+    form = UploadForm(request.POST or None, request.FILES or None, record=pl, initial=initial)
+    if request.method == "POST" and form.is_valid():
+        if _upload(request, form, record=pl) is not None:
+            return redirect("mo_close:record_preview", pk=pl.pk)
+    return render(request, "mo_close/record_add.html", {"form": form, "record": pl, "tree": pl.so_tree()})
+
+
+@module_required("mo_close.create")
+def record_preview(request, pk):
+    """Review the uploaded packing lists of a record (one or more PDFs), then Save or Cancel them together."""
+    pl = get_object_or_404(PackingList, pk=pk)
+    drafts = list(pl.documents.filter(saved=False).select_related("sales_order__parent").prefetch_related("lines"))
+    if not drafts:
         return redirect("mo_close:record_detail", pk=pk)
     if request.method == "POST":
         if request.POST.get("action") == "save":
-            services.save_record(request, pl)
-            messages.success(request, f"Record {pl.so_number} saved with {pl.lines.count()} rows.")
+            saved = services.save_drafts(request, pl)
+            rows = sum(len(d.lines.all()) for d in saved)
+            note = " Run Generate from Odoo to include them." if pl.generated_at else ""
+            messages.success(request, f"{pl.so_number}: {len(saved)} packing list(s) saved with {rows} rows.{note}")
             return redirect("mo_close:record_detail", pk=pk)
         so = pl.so_number
-        services.discard_draft(request, pl)
-        messages.info(request, f"Upload for {so} cancelled.")
-        return redirect("mo_close:record_new")
-    return render(request, "mo_close/record_preview.html", {"pl": pl, "groups": pl.grouped_lines()})
+        if services.discard_drafts(request, pl) is None:
+            messages.info(request, f"Upload for {so} cancelled.")
+            return redirect("mo_close:record_new")
+        messages.info(request, f"Upload cancelled; {so} is unchanged.")
+        return redirect("mo_close:record_detail", pk=pk)
+    for doc in drafts:
+        doc.groups = doc.grouped_lines()
+    return render(request, "mo_close/record_preview.html", {"pl": pl, "drafts": drafts, "tree": pl.so_tree()})
+
+
+def _tree_with_documents(pl):
+    """The record's SO tree with each SO's saved packing lists (.docs) and its grouped lines (.groups)."""
+    tree = pl.so_tree()
+    docs = list(pl.documents.filter(saved=True).select_related("created_by").prefetch_related("lines"))
+    for node in tree:
+        node.docs = [d for d in docs if d.sales_order_id == node.pk]
+        for doc in node.docs:
+            doc.groups = doc.grouped_lines()
+        node.groups = group_lines([line for d in node.docs for line in d.lines.all()])
+    return tree
 
 
 @module_required("mo_close.records")
@@ -249,30 +340,46 @@ def record_detail(request, pk):
     if f not in ROW_FILTERS:
         f = "all"
 
+    tree = _tree_with_documents(pl)
+    position = {n.pk: i for i, n in enumerate(tree)}
+    by_pk = {n.pk: n for n in tree}
+    root_pk = tree[0].pk if tree else None
     mos = list(
         pl.mos.select_related(*MO_RELATED).prefetch_related(
             "transfers__user_done_by", "transfers__final_confirmed_by"
         )
     )
-    groups = []
+    # MOs by SO (parent first, children under it); within an SO the packing list items, then components.
+    mos.sort(key=lambda mo: (position.get(mo.sales_order_id or root_pk, 0), not mo.on_packing_list))
+    groups, last = [], (None, None)
     for mo in mos:
         transfers = list(mo.transfers.all())
         shown = [t for t in transfers if _row_matches(t, f)]
-        if _row_matches(mo, f) or shown:
-            groups.append({"mo": mo, "transfers": transfers if f == "all" else shown})
+        if not (_row_matches(mo, f) or shown):
+            continue
+        node_pk = mo.sales_order_id or root_pk
+        groups.append(
+            {
+                "mo": mo,
+                "transfers": transfers if f == "all" else shown,
+                "so_head": by_pk.get(node_pk) if len(tree) > 1 and node_pk != last[0] else None,
+                "comp_head": not mo.on_packing_list and (node_pk != last[0] or last[1]),
+            }
+        )
+        last = (node_pk, mo.on_packing_list)
 
-    lines = pl.grouped_lines()
     matched_codes = {norm_code(mo.fg_code) for mo in mos if mo.on_packing_list}
-    unmatched = [g for g in lines if g["norm"] not in matched_codes]
+    unmatched = [(node, g) for node in tree for g in node.groups if g["norm"] not in matched_codes]
     counts = services.progress_counts([pl])[pl.pk]
     return render(
         request,
         "mo_close/record_detail.html",
         {
             "pl": pl,
+            "tree": tree,
             "groups": groups,
-            "lines": lines,
-            "raw_lines": pl.lines.all(),
+            "line_count": sum(len(n.groups) for n in tree),
+            "drafts": pl.documents.filter(saved=False).count(),
             "unmatched": unmatched if pl.generated_at else [],
             "source_fixes": [mo for mo in mos if mo.source_fix],
             "progress": counts,
@@ -285,11 +392,40 @@ def record_detail(request, pk):
 
 
 @module_required("mo_close.records")
-def record_pdf(request, pk):
-    pl = get_object_or_404(PackingList, pk=pk)
-    if not pl.pdf:
+def document_pdf(request, pk):
+    doc = get_object_or_404(PackingDocument, pk=pk)
+    if not doc.pdf:
         raise Http404
-    return FileResponse(pl.pdf.open("rb"), content_type="application/pdf", filename=pl.pdf_name or f"{pl.so_number}.pdf")
+    return FileResponse(doc.pdf.open("rb"), content_type="application/pdf", filename=doc.pdf_name or f"{doc.pk}.pdf")
+
+
+@require_POST
+@module_required("mo_close.delete")
+def document_delete(request, pk):
+    doc = get_object_or_404(PackingDocument.objects.select_related("record", "sales_order"), pk=pk)
+    pl = doc.record
+    name = doc.pdf_name
+    services.delete_document(request, doc)
+    messages.success(request, f"Packing list {name} removed. Run Generate from Odoo to update the MO's.")
+    return redirect(reverse("mo_close:record_detail", args=[pl.pk]) + "?tab=lines")
+
+
+@require_POST
+@module_required("mo_close.delete")
+def so_remove(request, pk):
+    """Records list (×): remove a child SO added by mistake and all its data, with a required reason."""
+    node = get_object_or_404(SalesOrder.objects.select_related("record"), pk=pk)
+    so = node.so_number
+    try:
+        summary = services.remove_child_so(request, node, request.POST.get("comment", ""))
+    except ValidationError as exc:
+        messages.error(request, " ".join(exc.messages))
+    else:
+        messages.success(request, f"{so} removed ({summary}).")
+    next_url = request.POST.get("next", "")
+    if next_url.startswith("/") and not next_url.startswith("//"):
+        return redirect(next_url)
+    return redirect("mo_close:records")
 
 
 @require_POST
@@ -451,14 +587,14 @@ PROGRESS_SORTS = {
 @module_required("mo_close.progress")
 def progress(request):
     show = request.GET.get("show", "open")
-    qs = PackingList.objects.exclude(status=PackingList.Status.DRAFT).select_related("created_by")
+    qs = PackingList.objects.exclude(status=PackingList.Status.DRAFT).select_related("created_by").prefetch_related("sales_orders")
     if show == "open":
         qs = qs.filter(status__in=[PackingList.Status.SAVED, PackingList.Status.GENERATED])
     elif show == "closed":
         qs = qs.filter(status=PackingList.Status.CLOSED)
     q = request.GET.get("q", "").strip()
     if q:
-        qs = qs.filter(Q(so_number__icontains=q) | Q(sold_to__icontains=q))
+        qs = qs.filter(pk__in=_records_matching(q))
 
     sort = request.GET.get("sort", "")
     direction = "asc" if request.GET.get("dir") == "asc" else "desc"

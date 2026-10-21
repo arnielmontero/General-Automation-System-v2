@@ -171,3 +171,24 @@ tbody.mo-group { border-top: 2px solid var(--border); }
 .row-progress { min-width: 110px; }
 .sf-cell { min-width: 125px; }
 .sf-undo { font-size: 11.5px; color: #9a3412; background: #fff7ed; border-left: 2px solid #f97316; padding: 2px 6px; margin-top: 4px; border-radius: 4px; }
+
+/* Parent / child SO structure */
+.so-children { display: flex; flex-direction: column; margin-top: 2px; }
+.so-child { font-size: 11.5px; font-weight: 500; color: var(--muted); padding-left: calc(var(--depth, 1) * 10px - 10px); white-space: nowrap; }
+.so-tree { list-style: none; margin: 0; padding: 0; }
+.so-tree li { padding: 3px 0 3px calc(var(--depth, 0) * 22px); }
+.so-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.so-chip { font-size: 12px; font-family: var(--bs-font-monospace); padding: 2px 8px; border-radius: 999px; background: #eef0f3; }
+.so-chip.is-parent { background: #e0ecff; font-weight: 700; }
+.so-head-row td { background: #f6f8fb !important; padding-left: calc(10px + var(--depth, 0) * 22px) !important; border-top: 2px solid #dfe3ea; }
+.so-section { border-top: 1px solid #eceef2; }
+.so-section-head { padding: 12px 18px 4px calc(18px + var(--depth, 0) * 22px); }
+.so-section .doc-head { padding: 6px 18px 0 calc(18px + var(--depth, 0) * 22px); }
+.so-link { color: inherit; text-decoration: none; }
+.so-link:hover { color: var(--brand); text-decoration: underline; }
+.so-link .bi { font-size: 11px; color: var(--brand); }
+/* Removable child SO chip: the whole chip turns red on hover / focus and opens the remove popup. */
+.so-chip.is-removable { cursor: pointer; transition: background .12s, color .12s, box-shadow .12s; }
+.so-chip.is-removable .so-remove { padding-left: 6px; color: #9aa0ab; font-size: 14px; line-height: 1; }
+.so-chip.is-removable:hover, .so-chip.is-removable:focus-visible { background: #fde8e8; color: var(--brand); box-shadow: inset 0 0 0 1px var(--brand); outline: none; }
+.so-chip.is-removable:hover .so-remove, .so-chip.is-removable:focus-visible .so-remove { color: var(--brand); }

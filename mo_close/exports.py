@@ -69,10 +69,16 @@ def _stage(row):
     return "open"
 
 
+def _so_label(pl):
+    """'S04743 (+ S04743-1, S08869)': the parent SO with its child SOs."""
+    children = [n.so_number for n in pl.child_sos]
+    return f"{pl.so_number} (+ {', '.join(children)})" if children else pl.so_number
+
+
 def record_rows(pl, only_open=False):
     """Flat rows: each MO followed by its transfers."""
     out = []
-    mos = pl.mos.select_related("user_done_by", "final_confirmed_by").prefetch_related(
+    mos = pl.mos.select_related("packing_list", "sales_order", "user_done_by", "final_confirmed_by").prefetch_related(
         "transfers__user_done_by", "transfers__final_confirmed_by"
     )
     for mo in mos:
@@ -85,7 +91,7 @@ def record_rows(pl, only_open=False):
                     "row": row,
                     "stage": _stage(row),
                     "values": [
-                        pl.so_number,
+                        mo.so_number,
                         mo.fg_code,
                         (mo.fg_description if mo.on_packing_list else f"{mo.fg_description} (component — not on packing list)")
                         if is_mo else "",
@@ -102,7 +108,7 @@ def record_rows(pl, only_open=False):
                         _who(row.final_confirmed_by),
                         _dt(row.final_confirmed_at),
                         row.final_comment,
-                        f"{mo.source_fix} → {pl.so_number}" if is_mo and mo.source_fix else "",
+                        f"{mo.source_fix} → {mo.so_number}" if is_mo and mo.source_fix else "",
                     ],
                 }
             )
@@ -146,6 +152,8 @@ def _title(ws, title, subtitle):
 def _info_pairs(pl, counts):
     return [
         ("SO", pl.so_number),
+        ("Child SOs", ", ".join(n.path for n in pl.child_sos) or "—"),
+        ("Packing lists", pl.documents.filter(saved=True).count()),
         ("Status", pl.get_status_display()),
         ("Sold To", pl.sold_to.replace("\n", ", ")),
         ("Tel. No.", pl.tel),
@@ -187,26 +195,38 @@ def record_excel(pl):
     _title(ws, f"MO's and transfers — {pl.so_number}", "Green = confirmed done · Yellow = waiting final confirmation · Red = not confirmed by Odoo")
     _sheet_table(ws, 4, ROW_COLUMNS, [r["values"] for r in rows], [STAGE_FILL.get(r["stage"]) for r in rows])
 
+    docs = [
+        (node, doc)
+        for node in pl.so_tree()
+        for doc in pl.documents.filter(sales_order=node, saved=True).prefetch_related("lines")
+    ]
     ws = wb.create_sheet("Packing List")
-    _title(ws, f"Packing list — {pl.so_number}", "Grouped by External Code")
+    _title(ws, f"Packing list — {pl.so_number}", "By SO (parent first, then child SOs) · grouped by External Code")
     _sheet_table(
         ws,
         4,
-        [("Invoice No", 12), ("External Code", 22), ("Description", 48), ("Qty", 8), ("PDF rows", 9)],
-        [[pl.so_number, g["code"], g["description"], _num(g["qty"]), g["rows"]] for g in pl.grouped_lines()],
+        [("SO", 14), ("Parent SO", 14), ("Invoice No", 12), ("External Code", 22), ("Description", 48), ("Qty", 8),
+         ("PDF rows", 9), ("PDF", 30)],
+        [
+            [node.so_number, node.parent.so_number if node.parent_id else "", doc.invoice_no, g["code"],
+             g["description"], _num(g["qty"]), g["rows"], doc.pdf_name]
+            for node, doc in docs
+            for g in doc.grouped_lines()
+        ],
     )
 
     ws = wb.create_sheet("PDF Rows")
-    _title(ws, f"PDF rows — {pl.so_number}", pl.pdf_name)
+    _title(ws, f"PDF rows — {pl.so_number}", f"{len(docs)} packing list PDF(s)")
     _sheet_table(
         ws,
         4,
-        [("#", 5), ("External Code", 22), ("Description", 48), ("UM", 8), ("Packages", 10),
+        [("SO", 14), ("PDF", 30), ("#", 5), ("External Code", 22), ("Description", 48), ("UM", 8), ("Packages", 10),
          ("Net Weight", 11), ("Gross Weight", 12), ("CBM", 9), ("Qty", 8)],
         [
-            [l.line_no, l.external_code, l.description, l.um, _num(l.packages), _num(l.net_weight),
-             _num(l.gross_weight), _num(l.cbm), _num(l.qty)]
-            for l in pl.lines.all()
+            [node.so_number, doc.pdf_name, l.line_no, l.external_code, l.description, l.um, _num(l.packages),
+             _num(l.net_weight), _num(l.gross_weight), _num(l.cbm), _num(l.qty)]
+            for node, doc in docs
+            for l in doc.lines.all()
         ],
     )
 
@@ -237,7 +257,7 @@ def open_items_excel(records):
         [("SO", 12), ("Sold To", 30), ("Container No.", 18), ("Rows", 8), ("Marked done", 12),
          ("Done in Odoo", 12), ("Final confirmed", 14), ("Progress %", 11)],
         [
-            [pl.so_number, pl.sold_to_name, pl.container_no, counts[pl.pk]["total"], counts[pl.pk]["marked"],
+            [_so_label(pl), pl.sold_to_name, pl.container_no, counts[pl.pk]["total"], counts[pl.pk]["marked"],
              counts[pl.pk]["system"], counts[pl.pk]["final"], counts[pl.pk]["percent"]]
             for pl in records
         ],
@@ -376,7 +396,7 @@ def open_items_pdf(records):
     summary = [[_p(t, STYLE_B) for t in ("SO", "Sold To", "Container No.", "Rows", "Marked done", "Done in Odoo", "Final confirmed", "Progress")]]
     for pl in records:
         c = counts[pl.pk]
-        summary.append([_p(x) for x in (pl.so_number, pl.sold_to_name, pl.container_no, c["total"], c["marked"], c["system"], c["final"], f"{c['percent']}%")])
+        summary.append([_p(x) for x in (_so_label(pl), pl.sold_to_name, pl.container_no, c["total"], c["marked"], c["system"], c["final"], f"{c['percent']}%")])
     t = Table(summary, repeatRows=1)
     t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F1F2F4")),
                            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D9DCE1"))]))
@@ -385,6 +405,6 @@ def open_items_pdf(records):
         rows = record_rows(pl, only_open=True)
         if not rows:
             continue
-        story += [PageBreak(), _header_block(f"{pl.so_number} — {pl.sold_to_name}", f"{len(rows)} row(s) not yet confirmed done"),
+        story += [PageBreak(), _header_block(f"{_so_label(pl)} — {pl.sold_to_name}", f"{len(rows)} row(s) not yet confirmed done"),
                   Spacer(1, 4 * mm), _rows_table(rows)]
     return _build_pdf(story)

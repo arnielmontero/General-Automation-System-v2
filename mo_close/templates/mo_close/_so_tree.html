@@ -1,0 +1,11 @@
+{# The record's SO tree: parent S0 first, each child SO under its parent. Nodes may carry .docs (saved PDFs). #}
+<ul class="so-tree">
+  {% for n in tree %}
+    <li style="--depth: {{ n.depth }}">
+      {% if n.depth %}<span class="muted">↳</span>{% endif %}
+      <span class="fw-semibold mono">{{ n.so_number }}</span>
+      {% if not n.depth %}<span class="pill pill-sm tone-blue">Parent</span>{% elif n.parent %}<span class="small-note">child of {{ n.parent.so_number }}</span>{% endif %}
+      {% if show_docs %}<span class="small-note">· {{ n.docs|length }} packing list{{ n.docs|length|pluralize }}</span>{% endif %}
+    </li>
+  {% endfor %}
+</ul>

@@ -55,7 +55,7 @@
   <div class="card-head">
     <h2>Records ({{ page.paginator.count }})</h2>
     <form method="get" class="d-flex gap-2 flex-wrap">
-      <input class="form-control form-control-sm" type="search" name="q" value="{{ q }}" placeholder="SO, customer, container…">
+      <input class="form-control form-control-sm" type="search" name="q" value="{{ q }}" placeholder="SO or child SO, customer, container…">
       <select name="status" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
         <option value="">All status</option>
         {% for value, label in statuses %}<option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
@@ -69,7 +69,7 @@
       <tbody>
       {% for pl in page %}
         <tr>
-          <td class="fw-semibold">{{ pl.so_number }}</td>
+          <td class="fw-semibold">{% if "mo_close.create" in modules %}<a class="so-link" href="{% url 'mo_close:record_add' pl.pk %}" title="Upload packing lists to {{ pl.so_number }} or a child SO"><i class="bi bi-upload"></i> {{ pl.so_number }}</a>{% else %}{{ pl.so_number }}{% endif %}{% include "mo_close/_so_children.html" %}</td>
           <td>{{ pl.sold_to_name|default:"—" }}</td>
           <td class="text-nowrap">{{ pl.doc_date_text|default:"—" }}</td>
           <td>{{ pl.container_no|default:"—" }}</td>

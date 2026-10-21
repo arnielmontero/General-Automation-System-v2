@@ -47,7 +47,7 @@
       {% for pl in page %}
         {% with p=pl.progress %}
         <tr>
-          <td class="fw-semibold">{{ pl.so_number }}</td>
+          <td class="fw-semibold">{{ pl.so_number }}{% include "mo_close/_so_children.html" %}</td>
           <td>{{ pl.sold_to_name|default:"—" }}</td>
           <td>{% record_pill pl %}</td>
           <td class="text-center">{{ p.total }}</td>

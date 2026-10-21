@@ -1,14 +1,15 @@
 {% load mo_close_tags %}{% with mo=group.mo %}{% with pl=mo.packing_list %}
 <tbody class="mo-group" id="mo-group-{{ mo.pk }}">
   <tr class="mo-row {% if mo.user_done and mo.system_status != 'confirmed' and not mo.final_confirmed %}row-flag{% endif %}">
-    <td>{% if link_so %}<a class="fw-semibold" href="{% url 'mo_close:record_detail' pl.pk %}">{{ pl.so_number }}</a>{% else %}{{ pl.so_number }}{% endif %}</td>
+    <td class="text-nowrap">{% if link_so %}<a class="fw-semibold" href="{% url 'mo_close:record_detail' pl.pk %}">{{ mo.so_number }}</a>{% else %}{{ mo.so_number }}{% endif %}
+      {% if mo.so_number != pl.so_number %}<div class="small-note" title="Child SO of record {{ pl.so_number }}">in {{ pl.so_number }}</div>{% endif %}</td>
     <td class="mono fw-semibold text-nowrap">{{ mo.fg_code }}</td>
     <td style="min-width: 170px">{{ mo.fg_description }}{% if not mo.on_packing_list %}
-      <div><span class="pill pill-sm tone-purple" title="Made for {{ pl.so_number }} (MO Source), but this product is not on the packing list">Component · not on packing list</span></div>{% endif %}</td>
+      <div><span class="pill pill-sm tone-purple" title="Made for {{ mo.so_number }} (MO Source), but this product is not on the packing list">Component · not on packing list</span></div>{% endif %}</td>
     <td class="text-end fw-semibold">{% if mo.on_packing_list %}{{ mo.qty|qty }}{% else %}—{% endif %}</td>
     <td class="ref-cell"><span class="fw-bold">{{ mo.reference }}</span>
       <div class="small-note">MO qty {{ mo.product_qty|qty }}{% if mo.on_packing_list and mo.product_qty != mo.qty %} <i class="bi bi-info-circle" title="MO quantity differs from the packing list quantity"></i>{% endif %}</div>{% with fix=mo.source_fix %}{% if fix %}
-      <div><span class="pill pill-sm tone-orange" title="Odoo Source: {{ mo.origin }} — the SO should be written {{ pl.so_number }}. Please correct the Source in Odoo.">Source fix: {{ fix }} → {{ pl.so_number }}</span></div>{% endif %}{% endwith %}</td>
+      <div><span class="pill pill-sm tone-orange" title="Odoo Source: {{ mo.origin }} — the SO should be written {{ mo.so_number }}. Please correct the Source in Odoo.">Source fix: {{ fix }} → {{ mo.so_number }}</span></div>{% endif %}{% endwith %}</td>
     <td>{% state_pill mo %}</td>
     <td>{% include "mo_close/_row_progress.html" with p=mo.row_progress %}</td>
     {% for sf in mo.sf_marks %}{% include "mo_close/_sf_cell.html" %}{% endfor %}

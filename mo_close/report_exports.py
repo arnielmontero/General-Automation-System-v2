@@ -20,7 +20,7 @@ from reportlab.platypus import PageBreak, Paragraph, Spacer, Table, TableStyle
 
 from .exports import (
     BORDER, HEAD_FILL, HEAD_FONT, STYLE_B, STYLE_SUB, STYLE_TITLE,
-    _build_pdf, _dt, _header_block, _p, _save, _sheet_table, _title,
+    _build_pdf, _dt, _header_block, _p, _save, _sheet_table, _so_label, _title,
 )
 from .reports import RECORD_SERIES
 
@@ -36,7 +36,7 @@ def _period_values(p):
 
 def _so_values(s):
     pl = s["pl"]
-    return [pl.so_number, pl.sold_to_name, s["date"].strftime("%d-%b-%Y") if s["date"] else "",
+    return [_so_label(pl), pl.sold_to_name, s["date"].strftime("%d-%b-%Y") if s["date"] else "",
             pl.get_status_display(), s["total"], s["marked"], s["system"], s["final"], s["percent"], s["days_open"]]
 
 
