@@ -109,7 +109,7 @@ body {
 .sort-link:hover, .sort-link.active { color: var(--text); }
 .sort-link.active i { color: var(--brand); }
 .table-soft td { padding: 10px 12px; vertical-align: middle; border-color: var(--border); }
-.table-soft tbody tr:hover td { background: #fcfcfd; }
+.table-soft tbody tr:hover td { background: #eef1f6; }
 .table-foot { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 18px; font-size: 12px; color: var(--muted); }
 .muted { color: var(--muted); }
 .flex-none { flex: none; }
@@ -127,6 +127,7 @@ body {
 .tr-row td.ref-cell::before { content: "↳"; position: absolute; left: 10px; color: var(--muted); }
 tbody.mo-group { border-top: 2px solid var(--border); }
 .row-flag td { background: #fff7f7 !important; }
+.table-soft tbody tr.row-flag:hover td { background: #fde9e9 !important; }
 
 /* Buttons */
 .btn { font-size: 13px; border-radius: 8px; font-weight: 500; }
